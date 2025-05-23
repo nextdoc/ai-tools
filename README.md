@@ -1,11 +1,11 @@
-# NextDoc Tools
+# Babashka AI Coding Tools
 
 Babashka tasks for running tests via nREPL connections.
 
 ## Overview
 
-NextDoc Tools provides utilities for connecting to nREPL servers and running tests.
-It's designed to work with Babashka, making it easy to run tests from the command line or programmatically.
+Provides utilities for connecting to nREPL servers and running tests.
+Runs in Babashka, making it fast & easy for Agents to run tests from the command line.
 
 ## Features
 
