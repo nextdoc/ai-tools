@@ -38,11 +38,15 @@ Add this text to your agent instructions...
 Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
 ```
 
-### Running Tests
+### Test runner
 
 Run the task with options to run your test(s)
 
 The task will return a 0 exit code if the tests pass.
+This is used by most coding agents to determine if a test passed or not.
+
+If standard out or standard error is present this will be echoed to the terminal.
+This allows coding agents to see logs and exceptions from test runs.
 
 ## License
 
