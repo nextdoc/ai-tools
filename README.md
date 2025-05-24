@@ -16,9 +16,24 @@ Runs in Babashka, making it fast & easy for Agents to run tests from the command
 
 ## Installation
 
-Copy the task from the bb.edn in this project. Add it to your bb.edn
+Add the following dependencies to your bb.edn (check for latest commit)
 
-Run the task to confirm install and see the options
+```clojure
+{babashka/nrepl-client {:git/url "https://github.com/babashka/nrepl-client"
+                        :git/sha "19fbef2525e47d80b9278c49a545de58f48ee7cf"}
+ nextdoc/ai-tools      {:git/url "https://github.com/nextdoc/ai-tools.git"
+                        :git/sha "4238f88bb42384dd51b61609ece6109e146217e7"}}
+```
+
+Add this task (from the bb.edn in this project) to your bb.edn
+
+```clojure
+{nrepl:test {:requires [[io.nextdoc.tools :as tools]]
+             :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
+             :task     (System/exit (tools/run-tests-task *command-line-args*))}}
+```
+
+Run the task to confirm installation and see the options
 
 ```bash
 bb nrepl:test
@@ -38,12 +53,14 @@ Add this text to your agent instructions...
 Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
 ```
 
+Ensure the REPL in your project is started.
+
 ### Test runner
 
-Run the task with options to run your test(s)
+Run the task with valid options to run your test(s)
 
-The task will return a 0 exit code if the tests pass.
-This is used by most coding agents to determine if a test passed or not.
+The task will return a zero exit code if the tests pass.
+The return code is used by most coding agents to determine if a test passed or not.
 
 If standard out or standard error is present this will be echoed to the terminal.
 This allows coding agents to see logs and exceptions from test runs.
