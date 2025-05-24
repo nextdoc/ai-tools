@@ -55,7 +55,7 @@ Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
 
 Ensure the REPL in your project is started.
 
-### Test runner
+## Test runner
 
 Run the task with valid options to run your test(s)
 
@@ -64,6 +64,25 @@ The return code is used by most coding agents to determine if a test passed or n
 
 If standard out or standard error is present this will be echoed to the terminal.
 This allows coding agents to see logs and exceptions from test runs.
+
+## Alternatives
+
+This tool is designed to provide fast test execution and feedback for coding agents without need for any extra
+infrastructure. Just a simple command line task for a coding agent to invoke.
+
+For the next level of sophistication you probably want to look for an MCP server.
+There are quite a few MCP servers that allow REPL connections and evaluations.
+
+## Is it safe?
+
+This is a **buyer beware** situation. Any coding agent that can write and evaluate code on your computer has associated
+risks.
+
+The responsibility for checking the code being run is on you. 
+
+You might think that providing access to a REPL raises the risk of unwanted side effects.
+This is partially true but most coding agents can also write bash scripts and pose the same level of danger from running
+those scripts.
 
 ## License
 
