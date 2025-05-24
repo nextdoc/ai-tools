@@ -16,6 +16,8 @@ Runs in Babashka, making it fast & easy for Agents to run tests from the command
 
 ## Installation
 
+The REPL where your tests will run must have [tools.namespace](https://github.com/clojure/tools.namespace) installed
+
 Add the following dependencies to your bb.edn (check for latest commit)
 
 ```clojure
@@ -78,7 +80,7 @@ There are quite a few MCP servers that allow REPL connections and evaluations.
 This is a **buyer beware** situation. Any coding agent that can write and evaluate code on your computer has associated
 risks.
 
-The responsibility for checking the code being run is on you. 
+The responsibility for checking the code being run is on you.
 
 You might think that providing access to a REPL raises the risk of unwanted side effects.
 This is partially true but most coding agents can also write bash scripts and pose the same level of danger from running
