@@ -22,9 +22,9 @@
   [port & test-namespaces]
   (try
     ; Reload any updated source
-    (doseq [tns test-namespaces]
-      (nrepl/eval-expr {:port port
-                        :expr (pr-str (list 'clojure.core/require (symbol tns) :reload-all))}))
+    (nrepl/eval-expr {:port port
+                      :expr (pr-str
+                             '((requiring-resolve 'clojure.tools.namespace.repl/refresh)))})
     (println "Reloaded" test-namespaces "...")
     ; Run tests
     (let [test-code (str "(binding [*out* (java.io.StringWriter.)
