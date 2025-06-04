@@ -24,9 +24,12 @@
 
     ; Reload any updated source
     (if (seq directories)
-      (let [refresh-dirs-code (str "(require 'clojure.tools.namespace.repl)
-                                    (clojure.tools.namespace.repl/set-refresh-dirs " (pr-str directories) ")
-                                    (clojure.tools.namespace.repl/refresh)")]
+      (let [form1 "(require 'clojure.tools.namespace.repl)"
+            form2 (str/join (conj (into ["(clojure.tools.namespace.repl/set-refresh-dirs "]
+                                        (map pr-str directories))
+                                  ")"))
+            form3 "(clojure.tools.namespace.repl/refresh)"
+            refresh-dirs-code (str/join "\n" [form1 form2 form3])]
         (nrepl/eval-expr {:port port
                           :expr refresh-dirs-code})
         (println "Reloaded directories:" directories "..."))
@@ -82,7 +85,7 @@
                                             :coerce   #(clojure.string/split % #",")
                                             :validate seq}
                               :directories {:ref     "<csv list>"
-                                            :desc    "Comma-separated list of directories to scanned for changes & reloaded before running tests"
+                                            :desc    "Comma-separated list of directories (relative to target project) to scanned for changes & reloaded before running tests"
                                             :require false
                                             :alias   :d
                                             :coerce  #(clojure.string/split % #",")
@@ -115,4 +118,5 @@
         return-code)
       (do
         (println "Test invocation failed")
+        (clojure.pprint/pprint result)
         1))))
