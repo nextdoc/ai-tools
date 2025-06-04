@@ -19,13 +19,23 @@
   "Runs tests in the specified test namespaces using an nREPL connection.
    Reloads the test namespaces before running tests.
    Returns a map containing test results, stdout, and stderr."
-  [port & test-namespaces]
+  [port directories & test-namespaces]
   (try
+
     ; Reload any updated source
-    (nrepl/eval-expr {:port port
-                      :expr (pr-str
-                             '((requiring-resolve 'clojure.tools.namespace.repl/refresh)))})
-    (println "Reloaded" test-namespaces "...")
+    (if (seq directories)
+      (let [refresh-dirs-code (str "(require 'clojure.tools.namespace.repl)
+                                    (clojure.tools.namespace.repl/set-refresh-dirs " (pr-str directories) ")
+                                    (clojure.tools.namespace.repl/refresh)")]
+        (nrepl/eval-expr {:port port
+                          :expr refresh-dirs-code})
+        (println "Reloaded directories:" directories "..."))
+      (do
+        (nrepl/eval-expr {:port port
+                          :expr (pr-str
+                                  '((requiring-resolve 'clojure.tools.namespace.repl/refresh)))})
+        (println "Reloaded" test-namespaces "...")))
+
     ; Run tests
     (let [test-code (str "(binding [*out* (java.io.StringWriter.)
                                     *err* (java.io.StringWriter.)]
@@ -65,32 +75,38 @@
    Returns a map with parsed :namespaces and :port-file values."
   [cli-args & {:keys [exit?] :or {exit? true}}]
   (cli/parse-opts cli-args
-                  {:spec     {:namespaces {:ref      "<csv list>"
-                                           :desc     "The names of the test namespaces to be run"
-                                           :require  true
-                                           :alias    :n
-                                           :coerce   #(clojure.string/split % #",")
-                                           :validate seq}
-                              :port-file  {:ref      "<file path>"
-                                           :desc     "The file containing the repl network port. defaults to .nrepl-port"
-                                           :require  false
-                                           :default  ".nrepl-port"
-                                           :alias    :p
-                                           :validate (fn [file]
-                                                       (and (string? file)
-                                                            (.exists (io/file file))))}}
+                  {:spec     {:namespaces  {:ref      "<csv list>"
+                                            :desc     "The names of the test namespaces to be run"
+                                            :require  true
+                                            :alias    :n
+                                            :coerce   #(clojure.string/split % #",")
+                                            :validate seq}
+                              :directories {:ref     "<csv list>"
+                                            :desc    "Comma-separated list of directories to scanned for changes & reloaded before running tests"
+                                            :require false
+                                            :alias   :d
+                                            :coerce  #(clojure.string/split % #",")
+                                            :default []}
+                              :port-file   {:ref      "<file path>"
+                                            :desc     "The file containing the repl network port. defaults to .nrepl-port"
+                                            :require  false
+                                            :default  ".nrepl-port"
+                                            :alias    :p
+                                            :validate (fn [file]
+                                                        (and (string? file)
+                                                             (.exists (io/file file))))}}
                    :error-fn (handle-parse-error {:exit? exit?})}))
 
-(comment (parse-tests-args ["-n" "a.b.c"] {:exit? false}))
+(comment (parse-tests-args ["-n" "a.b.c" "-d" "dev,src"] {:exit? false}))
 
 (defn run-tests-task
   "Main entry point for the test runner task.
    Parses command line arguments, connects to the nREPL server,
    runs the specified tests, and returns an exit code based on test results."
   [args]
-  (let [{:keys [namespaces port-file]} (parse-tests-args args)
+  (let [{:keys [namespaces directories port-file]} (parse-tests-args args)
         port (read-port port-file)
-        result (apply run-tests port namespaces)]
+        result (apply run-tests port directories namespaces)]
     (if (seq (:values result))
       (let [{:keys [fail error]} (:values result)
             return-code (reduce + [fail error])]

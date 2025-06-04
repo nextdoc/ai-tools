@@ -44,6 +44,7 @@ bb nrepl:test
 ### Command Line Options
 
 - `-n, --namespaces`: Comma-separated list of test namespaces to run (required)
+- `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".nrepl-port")
 
 ## Usage
@@ -53,6 +54,8 @@ Add this text to your agent instructions...
 
 ```
 Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
+
+Optionally specify directories to reload: `bb nrepl:test -n <namespace> -d src,test`
 ```
 
 Ensure the REPL in your project is started.
