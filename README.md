@@ -24,7 +24,7 @@ Add the following dependencies to your bb.edn (check for latest commit)
 {babashka/nrepl-client {:git/url "https://github.com/babashka/nrepl-client"
                         :git/sha "19fbef2525e47d80b9278c49a545de58f48ee7cf"}
  nextdoc/ai-tools      {:git/url "https://github.com/nextdoc/ai-tools.git"
-                        :git/sha "03be7d51b334c83e304eaf578c86403d5f95d133"}}
+                        :git/sha "f30c664e96af56e8392ff4bd1fca6147d11f589a"}}
 ```
 
 Add this task (from the bb.edn in this project) to your bb.edn
