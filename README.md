@@ -100,12 +100,14 @@ This will allow you to [add comments](https://aider.chat/docs/usage/watch.html#a
 
 - detect via its file watcher
 - respond with answers and/or changes
-- reload some or all of the changed namespaces
+- reload [some or all](https://github.com/nextdoc/ai-tools#command-line-options) of the changed namespaces
 - fix any errors it notices if the updated source doesn't compile
 - re-run the tests using the test runner task
 - add the output from the test runner to its context 
 - fix any errors it notices if the test runner returns a non-zero exit code
 - iterate on the change test loop until the test runner returns a zero exit code
+
+Tip: use [/web](https://aider.chat/docs/usage/images-urls.html#web-pages) to load a API references and example code into the context
 
 The biggest downside of working with this level of automation is that there is no human in the loop interruption unless
 Aider iterates until it makes the tests pass.
