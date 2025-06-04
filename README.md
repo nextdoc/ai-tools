@@ -70,6 +70,41 @@ The return code is used by most coding agents to determine if a test passed or n
 If standard out or standard error is present this will be echoed to the terminal.
 This allows coding agents to see logs and exceptions from test runs.
 
+## Workflows
+
+The Test Runner task is designed for a TDD style development workflow.
+
+Tests can be in their own namespace or it can be useful to create a fiddle namespace and have sample code and a test to
+drive that code in the same file.
+
+There are many AI development agents that can be used with this task.
+What follows is the setup and workflow for the agents we have tested...
+
+### Aider
+
+Aider is a very precise AI development agent.
+By precise, we mean that you manage all of the files in its context and which files are readable and writable.
+This provides a high level of control but also requires more manual work to manage the context.
+
+In your .ado.conf.yaml file you will want...
+
+```yaml
+auto-commits: false
+watch-files: true
+test-cmd: bb nrepl:test -n your.test.namespace
+auto-test: true
+yes-always: true
+```
+
+This will allow you to add comments in any namespace which Aider will pick up following any instructions and then will
+automatically rerun the tests using the test runner task.
+It will also automatically add the output from the test runner to its context and will automatically fix any errors it
+notices when the test runner returns a non-zero exit code.
+
+The biggest downside of working with this level of automation is that there is no human in the loop interruption unless
+Aider iterates until it makes the tests pass.
+You can inject yourself back into the loop by using CTRL-C at any time in the terminal.
+
 ## Alternatives
 
 This tool is designed to provide fast test execution and feedback for coding agents without need for any extra
