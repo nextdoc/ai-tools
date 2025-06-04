@@ -122,6 +122,7 @@
     (if (seq (:values result))
       (let [{:keys [fail error]} (:values result)
             return-code (reduce + [fail error])]
+        ; TODO Elide irrelevant stack trace lines when errors occur. This will reduce the context size during iteration.
         (some->> (:out result) (remove empty?) (seq) (str/join "\n") (#(str "<stdout>\n" % "\n</stdout>")) println)
         (some->> (:err result) (remove empty?) (seq) (str/join "\n") (#(str "<stderr>\n" % "\n</stderr>")) println)
         return-code)

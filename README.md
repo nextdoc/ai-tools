@@ -98,7 +98,10 @@ yes-always: true
 
 This will allow you to [add comments](https://aider.chat/docs/usage/watch.html#aider-in-your-ide) in any namespace. Aider will:
 
-- detect via its file watcher and respond with answers and/or changes
+- detect via its file watcher
+- respond with answers and/or changes
+- reload some or all of the changed namespaces
+- fix any errors it notices if the updated source doesn't compile
 - re-run the tests using the test runner task
 - add the output from the test runner to its context 
 - fix any errors it notices if the test runner returns a non-zero exit code
@@ -109,7 +112,9 @@ Aider iterates until it makes the tests pass.
 You can inject yourself back into the loop by using CTRL-C at any time in the terminal.
 
 The upside is this is a very lean and focused automated loop which you can control with a great deal of precision.
-The speed of the test runner means that iteration is rapid.
+This provides the full agentic power of the model, but with the smallest amount of token consumption.
+
+TODO Claude Code...
 
 ## Alternatives
 
