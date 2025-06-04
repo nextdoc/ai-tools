@@ -23,37 +23,46 @@
   (try
 
     ; Reload any updated source
-    (if (seq directories)
-      (let [form1 "(require 'clojure.tools.namespace.repl)"
-            form2 (str/join (conj (into ["(clojure.tools.namespace.repl/set-refresh-dirs "]
-                                        (map pr-str directories))
-                                  ")"))
-            form3 "(clojure.tools.namespace.repl/refresh)"
-            refresh-dirs-code (str/join "\n" [form1 form2 form3])]
-        (nrepl/eval-expr {:port port
-                          :expr refresh-dirs-code})
-        (println "Reloaded directories:" directories "..."))
-      (do
-        (nrepl/eval-expr {:port port
-                          :expr (pr-str
-                                  '((requiring-resolve 'clojure.tools.namespace.repl/refresh)))})
-        (println "Reloaded" test-namespaces "...")))
-
-    ; Run tests
-    (let [test-code (str "(binding [*out* (java.io.StringWriter.)
+    (let [reload-result (if (seq directories)
+                          (let [form1 "(require 'clojure.tools.namespace.repl)"
+                                form2 (str/join (conj (into ["(clojure.tools.namespace.repl/set-refresh-dirs "]
+                                                            (map pr-str directories))
+                                                      ")"))
+                                form3 "(clojure.tools.namespace.repl/refresh)"
+                                refresh-dirs-code (str/join "\n" [form1 form2 form3])]
+                            (-> {:port port
+                                 :expr refresh-dirs-code}
+                                (nrepl/eval-expr)
+                                :vals
+                                (last)))
+                          (-> {:port port
+                               :expr (pr-str
+                                       '((requiring-resolve 'clojure.tools.namespace.repl/refresh)))}
+                              (nrepl/eval-expr)
+                              :vals
+                              (last)))
+          reload-success? (= ":ok" reload-result)]
+      (if reload-success?
+        (do
+          (println "Reloaded" directories reload-result)
+          ; Run tests
+          (let [test-code (str "(binding [*out* (java.io.StringWriter.)
                                     *err* (java.io.StringWriter.)]
                            (let [result (apply clojure.test/run-tests '" (pr-str (mapv symbol test-namespaces)) ")]
                              {:result result
                               :out (str *out*)
                               :err (str *err*)}))")
-          {:keys [vals]} (nrepl/eval-expr {:port port
-                                           :expr test-code})]
-      (if vals
-        (let [{:keys [result out err]} (edn/read-string (first vals))]
-          {:values result
-           :out    (some-> out (clojure.string/split-lines))
-           :err    (some-> err (clojure.string/split-lines))})
-        (throw (ex-info "Failed to retrieve test results" {}))))
+                {:keys [vals]} (nrepl/eval-expr {:port port
+                                                 :expr test-code})]
+            (if vals
+              (let [{:keys [result out err]} (edn/read-string (first vals))]
+                {:values result
+                 :out    (some-> out (clojure.string/split-lines))
+                 :err    (some-> err (clojure.string/split-lines))})
+              (throw (ex-info "Failed to retrieve test results" {})))))
+        (do
+          (println "Reload failed...")
+          (clojure.pprint/pprint reload-result))))
     (catch Throwable t
       (.printStackTrace t))))
 
