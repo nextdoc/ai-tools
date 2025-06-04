@@ -86,7 +86,7 @@ Aider is a very precise AI development agent.
 By precise, we mean that you manage all of the files in its context and which files are readable and writable.
 This provides a high level of control but also requires more manual work to manage the context.
 
-In your .ado.conf.yaml file you will want...
+In your .aider.conf.yaml file you will want...
 
 ```yaml
 auto-commits: false
