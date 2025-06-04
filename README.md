@@ -96,10 +96,13 @@ auto-test: true
 yes-always: true
 ```
 
-This will allow you to [add comments](https://aider.chat/docs/usage/watch.html#aider-in-your-ide) in any namespace which Aider will pick up following any instructions and then will
-automatically rerun the tests using the test runner task.
-It will also automatically add the output from the test runner to its context and will automatically fix any errors it
-notices when the test runner returns a non-zero exit code.
+This will allow you to [add comments](https://aider.chat/docs/usage/watch.html#aider-in-your-ide) in any namespace. Aider will:
+
+- detect via its file watcher and respond with answers and/or changes
+- re-run the tests using the test runner task
+- add the output from the test runner to its context 
+- fix any errors it notices if the test runner returns a non-zero exit code
+- iterate on the change test loop until the test runner returns a zero exit code
 
 The biggest downside of working with this level of automation is that there is no human in the loop interruption unless
 Aider iterates until it makes the tests pass.
