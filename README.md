@@ -1,18 +1,31 @@
 # Babashka AI Coding Tools
 
-Babashka tasks for running tests via nREPL connections.
+A Babashka task for running tests via nREPL connections.
 
 ## Overview
 
 Provides utilities for connecting to nREPL servers and running tests.
+
 Runs in Babashka, making it fast & easy for Agents to run tests from the command line.
+
+Can be used with Aider which allows for focused context and minimizes token consumption.
 
 ## Features
 
 - Connect to nREPL servers
-- Run tests in specified namespaces
 - Reload namespaces before running tests
+- Capture reload errors
+- Run tests in specified namespaces
 - Capture test output (stdout/stderr)
+
+## Unique value proposition
+
+Why use this instead of other options?
+
+- If you prefer a test driven workflow
+- All changes are written to source before being sent to the REPL
+- Fresh nREPL connection for every test run ensures clean state
+- can be used with AI agents that are cheaper e.g. Aider
 
 ## Installation
 
@@ -21,18 +34,18 @@ The REPL where your tests will run must have [tools.namespace](https://github.co
 Add the following dependencies to your bb.edn (check for latest commit)
 
 ```clojure
-{babashka/nrepl-client {:git/url "https://github.com/babashka/nrepl-client"
-                        :git/sha "19fbef2525e47d80b9278c49a545de58f48ee7cf"}
- nextdoc/ai-tools      {:git/url "https://github.com/nextdoc/ai-tools.git"
-                        :git/sha "f30c664e96af56e8392ff4bd1fca6147d11f589a"}}
+babashka/nrepl-client {:git/url "https://github.com/babashka/nrepl-client"
+                       :git/sha "19fbef2525e47d80b9278c49a545de58f48ee7cf"}
+nextdoc/ai-tools {:git/url "https://github.com/nextdoc/ai-tools.git"
+                  :git/sha "f30c664e96af56e8392ff4bd1fca6147d11f589a"}
 ```
 
 Add this task (from the bb.edn in this project) to your bb.edn
 
 ```clojure
-{nrepl:test {:requires [[io.nextdoc.tools :as tools]]
-             :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
-             :task     (System/exit (tools/run-tests-task *command-line-args*))}}
+nrepl:test {:requires [[io.nextdoc.tools :as tools]]
+            :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
+            :task     (System/exit (tools/run-tests-task *command-line-args*))}
 ```
 
 Run the task to confirm installation and see the options
@@ -47,15 +60,17 @@ bb nrepl:test
 - `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".nrepl-port")
 
+The --directories option is useful if some of your sources fail to reload cleanly using tools.namespace.
+
 ## Usage
 
 The task is intended to be used with AI coding agents as a test runner.
-Add this text to your agent instructions...
+
+If using a coding agent that uses markdown to know about the test runner,
+add this text to your agent instructions...
 
 ```
 Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
-
-Optionally specify directories to reload: `bb nrepl:test -n <namespace> -d src,test`
 ```
 
 Ensure the REPL in your project is started.
@@ -96,21 +111,27 @@ auto-test: true
 yes-always: true
 ```
 
-This will allow you to [add comments](https://aider.chat/docs/usage/watch.html#aider-in-your-ide) in any namespace. Aider will:
+This will allow you to [add comments](https://aider.chat/docs/usage/watch.html#aider-in-your-ide) in any namespace.
+Aider will:
 
 - detect via its file watcher
 - respond with answers and/or changes
 - reload [some or all](https://github.com/nextdoc/ai-tools#command-line-options) of the changed namespaces
 - fix any errors it notices if the updated source doesn't compile
 - re-run the tests using the test runner task
-- add the output from the test runner to its context 
+- add the output from the test runner to its context
 - fix any errors it notices if the test runner returns a non-zero exit code
 - iterate on the change test loop until the test runner returns a zero exit code
 
-Tip: use [/web](https://aider.chat/docs/usage/images-urls.html#web-pages) to load a API references and example code into the context
+Tips:
+
+- use [/web](https://aider.chat/docs/usage/images-urls.html#web-pages) to load a API references and example code into
+  the context
+- or use /load to load many local and remote resources
+- keep the context size under 30k. Iteration tends to slow down around this point. /clear and reload init context
 
 The biggest downside of working with this level of automation is that there is no human in the loop interruption unless
-Aider iterates until it makes the tests pass.
+Aider iterates until it makes the tests pass or it hits its maximum number of **reflections**.
 You can inject yourself back into the loop by using CTRL-C at any time in the terminal.
 
 The upside is this is a very lean and focused automated loop which you can control with a great deal of precision.
@@ -123,12 +144,12 @@ TODO Claude Code...
 This tool is designed to provide fast test execution and feedback for coding agents without need for any extra
 infrastructure. Just a simple command line task for a coding agent to invoke.
 
-For the next level of sophistication you probably want to look for an MCP server.
-There are quite a few MCP servers that allow REPL connections and evaluations.
+For the next level of sophistication you probably want to look for
+an [MCP server](https://github.com/bhauman/clojure-mcp/tree/main).
 
 ## Is it safe?
 
-This is a **buyer beware** situation. Any coding agent that can write and evaluate code on your computer has associated
+This is **buyer beware**. Any coding agent that can write and evaluate code on your computer has associated
 risks.
 
 The responsibility for checking the code being run is on you.
