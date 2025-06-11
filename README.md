@@ -22,10 +22,11 @@ Can be used with Aider which allows for focused context and minimizes token cons
 
 Why use this instead of other options?
 
-- If you prefer a test driven workflow
-- All changes are written to source before being sent to the REPL
-- Fresh nREPL connection for every test run ensures clean state
+- if you prefer a test driven workflow
+- all changes are written to source before being sent to the REPL
+- fresh nREPL connection for every test run ensures clean state
 - can be used with AI agents that are cheaper e.g. Aider
+- agent flexibility allows use of any coding model
 
 ## Installation
 
@@ -137,14 +138,57 @@ You can inject yourself back into the loop by using CTRL-C at any time in the te
 The upside is this is a very lean and focused automated loop which you can control with a great deal of precision.
 This provides the full agentic power of the model, but with the smallest amount of token consumption.
 
-TODO Claude Code...
+### Claude Code
+
+Claude code represents a higher level of agentic coding compared to Aider.
+When using this TDD style workflow, the following features provide increased benefit:
+
+- Context is automatically managed and compacted when required
+- More tools are available
+- The agent can adjust the Babashka task invocation on its own or with your instruction
+
+Add the following instruction to your CLAUDE.md
+
+```markdown
+# Run single test via nREPL (fast iteration). Use this for "TDD mode" iteration.
+
+# The developer will indicate when to operate in "TDD mode".
+
+# More information on how to use this task is available at https://raw.githubusercontent.com/nextdoc/ai-tools/refs/heads/master/README.md
+
+bb nrepl:test -n <Fully qualified test namespace>
+```
+
+This allows you to instruct the agent to use **TDD mode** with a specific test or fiddle namespace.
+It will run this task and benefit from the speed and other values described above.
+
+Tips:
+
+- imbalanced parentheses happens less and less with higher power models but when you notice the agent in a loop with
+  this it's often faster to interrupt and fix it manually. Then ask it to resume.
+- To have the same context specific benefit of an Aider AI comment, add a comment anywhere with as much detail as you
+  need and then instruct Claude to implement it using the specific line number. This provides the location and file
+  context which improves the knowledge of the agent when it starts.
+
+## Gotchas
+
+It can be useful to instruct the agent to add logging or print lines to see what is happening when running tests.
+If you have any core async and logging inside those go blocks then this can suppress standard out capture by the test
+runner.
+In this case you will see the standard out in your host REPL instead. You can paste it into the conversation with
+the agent.
 
 ## Alternatives
 
 This tool is designed to provide fast test execution and feedback for coding agents without need for any extra
 infrastructure. Just a simple command line task for a coding agent to invoke.
 
-For the next level of sophistication you probably want to look for
+It has a single tool for interacting with your REPL and that is a code-reloading test invocation.
+A test can be used as a proxy for eval, so it is not limited to test workflows only.
+
+If you want finer grained tools and more control then you need a more sophisticated integration.
+
+For the next level of sophistication you probably want to look at
 an [MCP server](https://github.com/bhauman/clojure-mcp/tree/main).
 
 ## Is it safe?
