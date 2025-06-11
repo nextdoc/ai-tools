@@ -164,10 +164,10 @@ It will run this task and benefit from the speed and other values described abov
 
 Tips:
 
-- imbalanced parentheses happens less and less with higher power models but when you notice the agent in a loop with
+- imbalanced parentheses happens less and less with higher power models. When you notice the agent in a loop with
   this it's often faster to interrupt and fix it manually. Then ask it to resume.
-- To have the same context specific benefit of an Aider AI comment, add a comment anywhere with as much detail as you
-  need and then instruct Claude to implement it using the specific line number. This provides the location and file
+- To enjoy the same context specific benefit of an Aider AI comment, add a comment anywhere with as much detail as you
+  need. Then instruct Claude to implement it using the specific line number. This provides the location and file
   context which improves the knowledge of the agent when it starts.
 
 ## Gotchas
