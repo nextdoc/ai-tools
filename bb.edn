@@ -2,6 +2,10 @@
  :min-bb-version "1.0.164"
  :deps           {babashka/nrepl-client {:git/url "https://github.com/babashka/nrepl-client"
                                          :git/sha "19fbef2525e47d80b9278c49a545de58f48ee7cf"}}
- :tasks          {nrepl:test {:requires [[io.nextdoc.tools :as tools]]
-                              :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
-                              :task     (System/exit (tools/run-tests-task *command-line-args*))}}}
+ :tasks          {nrepl:test        {:requires [[io.nextdoc.tools :as tools]]
+                                     :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
+                                     :task     (System/exit (tools/run-tests-task *command-line-args*))}
+
+                  nrepl:test-shadow {:requires [[io.nextdoc.tools :as tools]]
+                                     :doc      "Run a test in Shadow-CLJS using an nrepl connection for ClojureScript testing"
+                                     :task     (System/exit (tools/run-cljs-tests-task *command-line-args*))}}}
