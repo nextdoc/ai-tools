@@ -17,9 +17,11 @@
   (:require [bencode.core :as bencode]
             [clojure.edn :as edn]
             [clojure.pprint :as pprint]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [clojure.string :as str])
   (:import (java.net Socket)
-           (java.io PushbackInputStream)))
+           (java.io PushbackInputStream)
+           (java.util UUID)))
 
 (defn- log
   "Private logging function that can be disabled in production.
@@ -42,26 +44,36 @@
   [in]   
   (bencode/read-bencode in))
 
+(defn- gen-id
+  "Generates a unique ID for nREPL message correlation."
+  []
+  (str (UUID/randomUUID)))
+
 (defn- read-until-done
-  "Reads nREPL messages until receiving a 'done' status.
+  "Reads nREPL messages until receiving a 'done' status for the specified ID.
   Implements a 10-second timeout to prevent hanging.
   Returns a vector of all received message frames."
-  [in]
+  ([in] (read-until-done in nil))  ; backward compat
+  ([in wanted-id]
   (let [deadline (+ (System/currentTimeMillis) 10000)] ; 10 second timeout
     (loop [frames []]
       (when (> (System/currentTimeMillis) deadline)
         (throw (ex-info "Timeout waiting for nREPL response" {:frames frames})))
       (let [m (read-msg in)
-            frames (conj frames m)]
-        (if (some #{"done"} (map #(String. %) (get m "status"))) 
-          frames 
-          (recur frames))))))
+            frames (conj frames m)
+            status (some-> (get m "status") (->> (map #(String. ^bytes %))) set)
+            id (when-let [id-bytes (get m "id")] (String. ^bytes id-bytes))]
+        (if (or (nil? wanted-id)  ; backward compat
+                (and (= id wanted-id) (contains? status "done"))
+                (and (nil? wanted-id) (contains? status "done")))
+          frames
+          (recur frames)))))))
 
 (defn- bytes->str
   "Converts byte array to string, handling nil values gracefully.
   nREPL returns values as byte arrays that need string conversion."
   [b]
-  (when b (String. b)))
+  (when b (String. ^bytes b "UTF-8")))
 
 (defn- last-val
   "Extracts the last evaluation result value from nREPL message frames.
@@ -103,13 +115,14 @@
     (.setSoTimeout sock 10000) ; 10 second timeout
     (log "Connected to nREPL, cloning session...")
     ;; clone session
-    (send! out {"op" "clone"})
-    (let [clone-frames (read-until-done in)
+    (let [clone-id (gen-id)]
+      (send! out {"op" "clone" "id" clone-id})
+      (let [clone-frames (read-until-done in clone-id)
           _ (log "Clone response received, frames:" (count clone-frames))
-          sid (or (bytes->str (get (last clone-frames) "new-session"))
-                  (bytes->str (get (last clone-frames) "session")))] ;; belt+braces
-      (log "Session ID:" sid)
-      (f {:in in :out out :sid sid}))))
+            sid (or (bytes->str (get (last clone-frames) "new-session"))
+                    (bytes->str (get (last clone-frames) "session")))] ;; belt+braces
+        (log "Session ID:" sid)
+        (f {:in in :out out :sid sid})))))
 
 (defn- eval*
   "Evaluates Clojure/ClojureScript code in a specific namespace via nREPL.
@@ -126,8 +139,9 @@
   Returns:
     Vector of all nREPL response frames until completion"
   [{:keys [in out sid]} code ns]
-  (send! out {"op" "eval" "code" code "ns" ns "session" sid})
-  (read-until-done in))
+  (let [id (gen-id)]
+    (send! out {"op" "eval" "code" code "ns" ns "session" sid "id" id})
+    (read-until-done in id)))
 
 (defn- switch-to-cljs-build
   "Switches the nREPL session to the specified Shadow-CLJS build environment.
@@ -149,11 +163,11 @@
   [io build-key]
   "Switch the nREPL session to the specified Shadow-CLJS build."
   (log "Switching to Shadow-CLJS build:" build-key)
-  (eval* io "(require 'shadow.cljs.devtools.api)" "user")
-  (eval* io (str "(shadow.cljs.devtools.api/nrepl-select :" build-key ")") "user")
+  ((:eval* io eval*) io "(require 'shadow.cljs.devtools.api)" "user")
+  ((:eval* io eval*) io (str "(shadow.cljs.devtools.api/nrepl-select :" build-key ")") "user")
   
   ;; Smoke test to verify CLJS runtime
-  (let [ping-frames (eval* io "(do (aset js/globalThis \"__ND_PING__\" 42) :ok)" "cljs.user")
+  (let [ping-frames ((:eval* io eval*) io "(do (aset js/globalThis \"__ND_PING__\" 42) :ok)" "cljs.user")
         ping-val (last-val ping-frames)]
     (when (not= ping-val ":ok")
       (throw (ex-info "Failed to switch to CLJS runtime" {:frames ping-frames})))
@@ -195,7 +209,7 @@
   [io]
   "Install the test reporter that captures results and failure details in global state."
   (let [reporter-code (get-reporter-code)
-        reporter-frames (eval* io reporter-code "cljs.user")
+        reporter-frames ((:eval* io eval*) io reporter-code "cljs.user")
         reporter-val (last-val reporter-frames)]
     (log "Reporter result:" reporter-val)
     (when (nil? reporter-val)
@@ -222,7 +236,7 @@
                               (map #(format "(require '%s :reload)" %))
                               (clojure.string/join " "))
                          " :ok)")
-        require-frames (eval* io require-expr "cljs.user")
+        require-frames ((:eval* io eval*) io require-expr "cljs.user")
         require-val (last-val require-frames)]
     (log "Require result:" require-val)
     (when (nil? require-val)
@@ -247,7 +261,7 @@
   (let [run-expr (str "(do (cljs.test/run-tests " 
                      (->> test-namespaces (map #(str "'" %)) (clojure.string/join " "))
                      ") :pending)")
-        run-frames (eval* io run-expr "cljs.user")
+        run-frames ((:eval* io eval*) io run-expr "cljs.user")
         run-val (last-val run-frames)]
     (log "Run result:" run-val)
     (when (nil? run-val)
@@ -289,25 +303,9 @@
   (let [base-out (last-out frames)
         base-err (last-err frames)
         base-lines (if (empty? base-out) [] [base-out])
-        failure-lines (when (seq (:failures m))
-                        (concat
-                          ["=== DETAILED FAILURES ==="]
-                          (mapcat (fn [failure]
-                                    [(str (:type failure) " in " (:testing-vars failure))
-                                     (when (seq (:testing-contexts failure))
-                                       (str "Context: " (clojure.string/join " > " (:testing-contexts failure))))
-                                     (when (:message failure)
-                                       (str "Message: " (:message failure)))
-                                     (str "Expected: " (:expected failure))
-                                     (str "Actual:   " (:actual failure))
-                                     ""]) ; Empty line between failures
-                                  (:failures m))))
-        all-out-lines (if failure-lines
-                        (concat base-lines failure-lines)
-                        base-lines)
         err-lines (if (empty? base-err) [] [base-err])]
     {:values (select-keys m [:test :pass :fail :error])  ; Only include basic counts
-     :out    (remove nil? all-out-lines)
+     :out    (remove nil? base-lines)
      :err    err-lines}))
 
 (defn- poll-for-test-results
@@ -336,7 +334,7 @@
       (when (> (System/currentTimeMillis) deadline)
         (throw (ex-info "Timed out waiting for test results" {})))
       (Thread/sleep 25)
-      (let [frames (eval* io "(let [a (aget js/globalThis \"__NEXTDOC_RESULT__\")]
+      (let [frames ((:eval* io eval*) io "(let [a (aget js/globalThis \"__NEXTDOC_RESULT__\")]
                                 (if a (pr-str @a) ::nil))" "cljs.user")
             vstr   (last-val frames)]
         (when (= 0 (mod attempt 40)) ; Print every second
@@ -354,6 +352,91 @@
             (log "✓ Test results:" m)
             (display-test-results m)
             (format-test-output m frames)))))))
+
+(defn- create-accumulating-reader
+  "Creates a read-until-done function that accumulates stdout/stderr to provided atoms.
+  
+  Args:
+    out* - StringBuilder atom for stdout accumulation
+    err* - StringBuilder atom for stderr accumulation
+  
+  Returns:
+    Function that reads nREPL messages until 'done' while accumulating output"
+  [out* err*]
+  (fn [in wanted-id]
+    (let [deadline (+ (System/currentTimeMillis) 10000)]
+      (loop [frames []]
+        (when (> (System/currentTimeMillis) deadline)
+          (throw (ex-info "Timeout waiting for nREPL response" {:frames frames})))
+        (let [m (read-msg in)
+              frames (conj frames m)]
+          ;; Accumulate any :out/:err to session-wide accumulators
+          (when-let [s (bytes->str (get m "out"))]
+            (.append ^StringBuilder @out* s))
+          (when-let [s (bytes->str (get m "err"))]
+            (.append ^StringBuilder @err* s))
+          (let [status (some-> (get m "status") (->> (map bytes->str)) set)
+                id (some-> (get m "id") bytes->str)]
+            (if (and (= id wanted-id) (contains? status "done"))
+              frames
+              (recur frames))))))))
+
+(defn- create-accumulating-eval
+  "Creates an eval* function that uses the accumulating reader.
+  
+  Args:
+    read-until-done-fn - The accumulating read-until-done function
+  
+  Returns:
+    Function that evaluates code while accumulating output"
+  [read-until-done-fn]
+  (fn [{:keys [in out sid]} code ns]
+    (let [id (gen-id)]
+      (send! out {"op" "eval" "code" code "ns" ns "session" sid "id" id})
+      (read-until-done-fn in id))))
+
+(defn- drain-remaining-output
+  "Drains any remaining async output from the nREPL connection.
+  
+  Args:
+    io - Connection context
+    out* - StringBuilder atom for stdout accumulation  
+    err* - StringBuilder atom for stderr accumulation
+    timeout-ms - How long to wait for additional output (default 200ms)"
+  ([io out* err*] (drain-remaining-output io out* err* 200))
+  ([io out* err* timeout-ms]
+   (try
+     (let [quiet-deadline (+ (System/currentTimeMillis) timeout-ms)]
+       (loop []
+         (if (< (System/currentTimeMillis) quiet-deadline)
+           (do
+             ;; Only read if data is available to avoid blocking
+             (when (> (.available (:in io)) 0)
+               (when-let [m (try (read-msg (:in io)) (catch Exception _ nil))]
+                 (when-let [s (bytes->str (get m "out"))]
+                   (.append ^StringBuilder @out* s))
+                 (when-let [s (bytes->str (get m "err"))]
+                   (.append ^StringBuilder @err* s))))
+             ;; Small sleep to avoid busy waiting
+             (Thread/sleep 10)
+             (recur))
+           nil)))
+     (catch Exception _ nil))))
+
+(defn- finalize-result-with-accumulated-output
+  "Combines test results with accumulated session output.
+  
+  Args:
+    result - Test result map from poll-for-test-results
+    out* - StringBuilder atom containing accumulated stdout
+    err* - StringBuilder atom containing accumulated stderr
+  
+  Returns:
+    Enhanced result map with :out and :err from session accumulation"
+  [result out* err*]
+  (-> result
+      (assoc :out (let [s (str @out*)] (cond-> [] (not (empty? s)) (conj s))))
+      (assoc :err (let [s (str @err*)] (cond-> [] (not (empty? s)) (conj s))))))
 
 (defn run-shadow-tests
   "Main entry point for running ClojureScript tests via Shadow-CLJS nREPL.
@@ -379,12 +462,25 @@
   Throws:
     Various ex-info exceptions for connection, build switching, or test execution failures"
   [port build-id test-namespaces]
-  "Runs tests in Shadow-CLJS using raw nREPL protocol with proper session management."
   (let [build-key (name build-id)]
     (with-session port
       (fn [io]
-        (switch-to-cljs-build io build-key)
-        (install-test-reporter io)
-        (require-test-namespaces io test-namespaces)
-        (start-test-execution io test-namespaces)
-        (poll-for-test-results io)))))
+        ;; Create session-wide output accumulators
+        (let [out* (atom (StringBuilder.))
+              err* (atom (StringBuilder.))
+              ;; Create accumulating reader and eval functions
+              accumulating-reader (create-accumulating-reader out* err*)
+              accumulating-eval (create-accumulating-eval accumulating-reader)
+              ;; Create IO context with accumulating eval function  
+              io-with-accumulation (assoc io :eval* accumulating-eval)]
+          
+          ;; Run the test workflow with output accumulation
+          (switch-to-cljs-build io-with-accumulation build-key)
+          (install-test-reporter io-with-accumulation)
+          (require-test-namespaces io-with-accumulation test-namespaces)
+          (start-test-execution io-with-accumulation test-namespaces)
+          (let [result (poll-for-test-results io-with-accumulation)]
+            ;; Drain any remaining async output
+            (drain-remaining-output io out* err*)
+            ;; Return result with accumulated output
+            (finalize-result-with-accumulated-output result out* err*)))))))
