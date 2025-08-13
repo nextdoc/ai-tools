@@ -7,7 +7,7 @@
     [clojure.edn :as edn]
     [clojure.java.io :as io]
     [clojure.string :as str]
-    [clojure.string]))
+    [io.nextdoc.shadow-nrepl :as shadow-nrepl]))
 
 (defn read-port
   "SHARED: Reads a port number from a file and returns it as an integer.
@@ -144,25 +144,26 @@
 ;;
 ;; Design for Shadow-CLJS integration:
 ;;
-;; 1) Shadow build + nREPL basics
+;; 1) Architecture
+;;    - Delegates to io.nextdoc.shadow-nrepl namespace for actual implementation
+;;    - Uses custom bencode nREPL client for proper session management
 ;;    - Shadow writes nREPL port to .shadow-cljs/nrepl.port
-;;    - Can use :node-test target for CI/fallback or browser-test for DOM
-;;    - Hot-reload is handled by Shadow's :after-load hooks
 ;;
-;; 2) CLJS test runner approach
-;;    - Connect to Shadow's nREPL port (default: .shadow-cljs/nrepl.port)
-;;    - Switch session to CLJS using Shadow's API
-;;    - Use (require 'ns :reload) instead of tools.namespace
-;;    - Run tests using cljs.test with async completion handling
+;; 2) Implementation approach
+;;    - Custom raw bencode nREPL client (not babashka/nrepl-client)
+;;    - Proper session management with sticky session IDs
+;;    - Custom test reporter with detailed failure capture
+;;    - Polling-based async result collection
 ;;
 ;; 3) Key differences from JVM runner:
-;;    - No tools.namespace (Shadow handles compilation/watching)
-;;    - Async test execution (cljs.test/run-tests is async)
-;;    - Optional build-id to select specific Shadow build
-;;    - Returns promise-based results in CLJS environment
+;;    - Uses Shadow-CLJS API for build switching
+;;    - Custom test reporter captures detailed failures
+;;    - Async test execution with polling for results
+;;    - Pretty-printed results in <results> XML tags
+;;    - Modular design with separate helper functions
 ;;
 ;; 4) BB.edn usage:
-;;    - Separate tasks for JVM (nrepl:test) and CLJS (nrepl:cljs-test)
+;;    - Separate tasks: nrepl:test (JVM) and nrepl:test-shadow (CLJS)
 ;;    - User explicitly chooses which runtime to target
 ;;    - No automatic dispatch between JVM/CLJS modes
 
@@ -193,59 +194,6 @@
                                                             (.exists (io/file file))))}}
                    :error-fn (handle-parse-error {:exit? exit?})}))
 
-(def ^:private pending-token "::nextdoc/pending")
-
-(defn- cljs-install-reporter-form
-  "Builds a CLJS form that installs a test reporter."
-  []
-  "(do
-     (require '[cljs.test :as t])
-     ;; Use globalThis for portable global access
-     (when-not (aget js/globalThis \"__NEXTDOC_RESULT__\")
-       (aset js/globalThis \"__NEXTDOC_RESULT__\" (atom nil)))
-     ;; Reset test environment for fresh counters
-     (t/set-env! (t/empty-env))
-     ;; Hook :summary for reliable completion signaling
-     (when (contains? (methods t/report) [:cljs.test/default :summary])
-       (remove-method t/report [:cljs.test/default :summary]))
-     (defmethod t/report [:cljs.test/default :summary] [m]
-       (reset! (aget js/globalThis \"__NEXTDOC_RESULT__\")
-               (select-keys m [:test :pass :fail :error])))
-     :ok)")
-
-(defn- cljs-require-tests-form
-  "Builds a CLJS form that requires test namespaces."
-  [test-namespaces]
-  (let [reqs (->> test-namespaces
-                  (map #(format "(require '%s :reload)" %))
-                  (clojure.string/join " "))]
-    (str "(do " reqs " :ok)")))
-
-(defn- cljs-run-tests-form
-  "Builds a CLJS form that runs tests."
-  [test-namespaces]
-  (let [nslist (->> test-namespaces (map #(str "'" %)) (clojure.string/join " "))]
-    (str "(do (cljs.test/run-tests " nslist ") " (pr-str pending-token) ")")))
-
-(def ^:private cljs-peek-form
-  "(let [a (aget js/globalThis \"__NEXTDOC_RESULT__\")]
-     (if a (pr-str @a) ::nil))")                           ;; returns the symbol ::nil until the atom exists or is still nil
-
-(defn run-cljs-tests
-  "CLJS: Runs tests in the specified test namespaces using a Shadow-CLJS nREPL connection.
-   Switches to CLJS REPL, reloads namespaces, and runs tests asynchronously.
-   Uses polling to capture async test results."
-  [port build-id & test-namespaces]
-  (try
-    ;; Use the custom bencode client for proper session management
-    (require 'io.nextdoc.shadow-nrepl)
-    (let [run-shadow-tests (resolve 'io.nextdoc.shadow-nrepl/run-shadow-tests)]
-      (run-shadow-tests port build-id test-namespaces))
-    
-    (catch Throwable t
-      {:values {:test 0 :pass 0 :fail 0 :error 1}
-       :out    []
-       :err    [(str "Error: " (.getMessage t))]})))
 
 (defn run-cljs-tests-task
   "CLJS: Main entry point for the Shadow-CLJS test runner task.
@@ -254,7 +202,13 @@
   [args]
   (let [{:keys [namespaces build-id port-file]} (parse-cljs-tests-args args)
         port (read-port port-file)
-        result (apply run-cljs-tests port build-id namespaces)]
+        result (try
+                 ;; Use the custom bencode client for proper session management
+                 (shadow-nrepl/run-shadow-tests port build-id namespaces)
+                 (catch Throwable t
+                   {:values {:test 0 :pass 0 :fail 0 :error 1}
+                    :out    []
+                    :err    [(str "Error: " (.getMessage t))]}))]
     (if (seq (:values result))
       (let [{:keys [fail error]} (:values result)
             return-code (reduce + [(or fail 0) (or error 0)])]
