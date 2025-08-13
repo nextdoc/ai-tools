@@ -1,9 +1,16 @@
 (ns io.nextdoc.shadow-nrepl
   "Raw bencode nREPL client for Shadow-CLJS with proper session management."
   (:require [bencode.core :as bencode]
-            [clojure.edn :as edn])
+            [clojure.edn :as edn]
+            [clojure.pprint :as pprint])
   (:import (java.net Socket)
            (java.io PushbackInputStream)))
+
+(defn- log
+  "Private logging function that can be disabled in production."
+  [& args]
+  ;(apply println args)  ; Comment this line to disable debug output
+  nil)
 
 (defn- send! [out msg] 
   (bencode/write-bencode out msg) 
@@ -41,14 +48,14 @@
               out  (.getOutputStream sock)]
     ;; Set socket timeout to prevent hanging
     (.setSoTimeout sock 10000) ; 10 second timeout
-    (println "Connected to nREPL, cloning session...")
+    (log "Connected to nREPL, cloning session...")
     ;; clone session
     (send! out {"op" "clone"})
     (let [clone-frames (read-until-done in)
-          _ (println "Clone response received, frames:" (count clone-frames))
+          _ (log "Clone response received, frames:" (count clone-frames))
           sid (or (bytes->str (get (last clone-frames) "new-session"))
                   (bytes->str (get (last clone-frames) "session")))] ;; belt+braces
-      (println "Session ID:" sid)
+      (log "Session ID:" sid)
       (f {:in in :out out :sid sid}))))
 
 (defn eval* [{:keys [in out sid]} code ns]
@@ -57,7 +64,7 @@
 
 (defn- switch-to-cljs-build [io build-key]
   "Switch the nREPL session to the specified Shadow-CLJS build."
-  (println "Switching to Shadow-CLJS build:" build-key)
+  (log "Switching to Shadow-CLJS build:" build-key)
   (eval* io "(require 'shadow.cljs.devtools.api)" "user")
   (eval* io (str "(shadow.cljs.devtools.api/nrepl-select :" build-key ")") "user")
   
@@ -66,27 +73,56 @@
         ping-val (last-val ping-frames)]
     (when (not= ping-val ":ok")
       (throw (ex-info "Failed to switch to CLJS runtime" {:frames ping-frames})))
-    (println "✓ Successfully switched to CLJS runtime")))
+    (log "✓ Successfully switched to CLJS runtime")))
 
 (defn- install-test-reporter [io]
-  "Install the test reporter that captures results in global state."
-  (let [reporter-frames (eval* io 
-                          "(do (require '[cljs.test :as t])
-                               (when-not (aget js/globalThis \"__NEXTDOC_RESULT__\")
-                                 (aset js/globalThis \"__NEXTDOC_RESULT__\" (atom nil)))
-                               (t/set-env! (t/empty-env))
-                               (when (contains? (methods t/report) [:cljs.test/default :summary])
-                                 (remove-method t/report [:cljs.test/default :summary]))
-                               (defmethod t/report [:cljs.test/default :summary] [m]
-                                 (reset! (aget js/globalThis \"__NEXTDOC_RESULT__\")
-                                         (select-keys m [:test :pass :fail :error])))
-                               :ok)" 
-                          "cljs.user")
+  "Install the test reporter that captures results and failure details in global state."
+  (let [reporter-code "(do 
+                         (require '[cljs.test :as t])
+                         (when-not (aget js/globalThis \"__NEXTDOC_RESULT__\")
+                           (aset js/globalThis \"__NEXTDOC_RESULT__\" (atom nil)))
+                         (when-not (aget js/globalThis \"__NEXTDOC_FAILURES__\")
+                           (aset js/globalThis \"__NEXTDOC_FAILURES__\" (atom [])))
+                         (t/set-env! (t/empty-env))
+                         (when (contains? (methods t/report) [:cljs.test/default :summary])
+                           (remove-method t/report [:cljs.test/default :summary]))
+                         (when (contains? (methods t/report) [:cljs.test/default :fail])
+                           (remove-method t/report [:cljs.test/default :fail]))
+                         (when (contains? (methods t/report) [:cljs.test/default :error])
+                           (remove-method t/report [:cljs.test/default :error]))
+                         (reset! (aget js/globalThis \"__NEXTDOC_FAILURES__\") [])
+                         (defmethod t/report [:cljs.test/default :fail] [m]
+                           (swap! (aget js/globalThis \"__NEXTDOC_FAILURES__\") conj 
+                                  {:type :fail
+                                   :testing-contexts (:testing-contexts m)
+                                   :testing-vars (str (:testing-vars m))
+                                   :message (:message m)
+                                   :expected (:expected m) 
+                                   :actual (:actual m)}))
+                         (defmethod t/report [:cljs.test/default :error] [m]
+                           (swap! (aget js/globalThis \"__NEXTDOC_FAILURES__\") conj
+                                  {:type :error
+                                   :testing-contexts (:testing-contexts m)
+                                   :testing-vars (str (:testing-vars m))
+                                   :message (:message m)
+                                   :expected (:expected m)
+                                   :actual (:actual m)}))
+                         (defmethod t/report [:cljs.test/default :summary] [m]
+                           (let [failures @(aget js/globalThis \"__NEXTDOC_FAILURES__\")
+                                 fail-count (count (filter #(= :fail (:type %)) failures))
+                                 error-count (count (filter #(= :error (:type %)) failures))]
+                             (reset! (aget js/globalThis \"__NEXTDOC_RESULT__\")
+                                     (assoc (select-keys m [:test :pass])
+                                            :fail fail-count
+                                            :error error-count
+                                            :failures failures))))
+                         :ok)"
+        reporter-frames (eval* io reporter-code "cljs.user")
         reporter-val (last-val reporter-frames)]
-    (println "Reporter result:" reporter-val)
+    (log "Reporter result:" reporter-val)
     (when (nil? reporter-val)
       (throw (ex-info "Failed to install test reporter" {:frames reporter-frames})))
-    (println "✓ Installed test reporter")))
+    (log "✓ Installed test reporter")))
 
 (defn- require-test-namespaces [io test-namespaces]
   "Require all the test namespaces for execution."
@@ -97,10 +133,10 @@
                          " :ok)")
         require-frames (eval* io require-expr "cljs.user")
         require-val (last-val require-frames)]
-    (println "Require result:" require-val)
+    (log "Require result:" require-val)
     (when (nil? require-val)
       (throw (ex-info "Failed to require test namespaces" {:frames require-frames})))
-    (println "✓ Required test namespaces:" test-namespaces)))
+    (log "✓ Required test namespaces:" test-namespaces)))
 
 (defn- start-test-execution [io test-namespaces]
   "Start the test execution (non-blocking)."
@@ -109,15 +145,49 @@
                      ") :pending)")
         run-frames (eval* io run-expr "cljs.user")
         run-val (last-val run-frames)]
-    (println "Run result:" run-val)
+    (log "Run result:" run-val)
     (when (nil? run-val)
       (throw (ex-info "Failed to start tests" {:frames run-frames})))
-    (println "✓ Started test execution")))
+    (log "✓ Started test execution")))
+
+(defn- display-test-results [m]
+  "Pretty print test results for terminal display."
+  (println "\n<results>")
+  (if (map? m)
+    (pprint/pprint m)
+    (println m))
+  (println "</results>"))
+
+(defn- format-test-output [m frames]
+  "Format test results for return to the main test runner."
+  (let [base-out (last-out frames)
+        base-err (last-err frames)
+        base-lines (if (empty? base-out) [] [base-out])
+        failure-lines (when (seq (:failures m))
+                        (concat
+                          ["=== DETAILED FAILURES ==="]
+                          (mapcat (fn [failure]
+                                    [(str (:type failure) " in " (:testing-vars failure))
+                                     (when (seq (:testing-contexts failure))
+                                       (str "Context: " (clojure.string/join " > " (:testing-contexts failure))))
+                                     (when (:message failure)
+                                       (str "Message: " (:message failure)))
+                                     (str "Expected: " (:expected failure))
+                                     (str "Actual:   " (:actual failure))
+                                     ""]) ; Empty line between failures
+                                  (:failures m))))
+        all-out-lines (if failure-lines
+                        (concat base-lines failure-lines)
+                        base-lines)
+        err-lines (if (empty? base-err) [] [base-err])]
+    {:values (select-keys m [:test :pass :fail :error])  ; Only include basic counts
+     :out    (remove nil? all-out-lines)
+     :err    err-lines}))
 
 (defn- poll-for-test-results [io]
   "Poll for test results with timeout and return the final result map."
   (let [deadline (+ (System/currentTimeMillis) 30000)] ; 30s timeout
-    (println "Polling for test results...")
+    (log "Polling for test results...")
     (loop [attempt 0]
       (when (> (System/currentTimeMillis) deadline)
         (throw (ex-info "Timed out waiting for test results" {})))
@@ -126,14 +196,22 @@
                                 (if a (pr-str @a) ::nil))" "cljs.user")
             vstr   (last-val frames)]
         (when (= 0 (mod attempt 40)) ; Print every second
-          (println "Poll attempt" attempt "result:" vstr))
+          (log "Poll attempt" attempt "result:" vstr))
         (if (or (nil? vstr) (= vstr "::nil"))
           (recur (inc attempt))
-          (let [m (edn/read-string vstr)]
-            (println "✓ Test results:" m)
-            {:values m
-             :out (last-out frames)
-             :err (last-err frames)}))))))
+          (let [first-read (edn/read-string vstr)
+                _ (log "First read type:" (type first-read) "value:" first-read)
+                m (if (string? first-read)
+                    (try 
+                      (edn/read-string first-read)
+                      (catch Exception e
+                        (log "Second read failed:" (.getMessage e))
+                        first-read))
+                    first-read)]
+            (log "✓ Test results:" m)
+            (log "Final type of parsed result:" (type m) "Is map?" (map? m))
+            (display-test-results m)
+            (format-test-output m frames)))))))
 
 (defn run-shadow-tests [port build-id test-namespaces]
   "Runs tests in Shadow-CLJS using raw nREPL protocol with proper session management."
