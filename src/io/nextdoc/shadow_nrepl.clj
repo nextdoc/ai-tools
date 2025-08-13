@@ -27,8 +27,8 @@
   "Private logging function that can be disabled in production.
   Accepts any number of arguments and logs them via println when enabled.
   Comment out the println line to disable all debug output."
-  [& args]
-  ;(apply println args)  ; Comment this line to disable debug output
+  [& _args]
+  ;(apply println _args)  ; Comment this line to disable debug output
   nil)
 
 (defn- send!
@@ -161,7 +161,6 @@
   Throws:
     ex-info if unable to connect to the CLJS runtime"
   [io build-key]
-  "Switch the nREPL session to the specified Shadow-CLJS build."
   (log "Switching to Shadow-CLJS build:" build-key)
   ((:eval* io eval*) io "(require 'shadow.cljs.devtools.api)" "user")
   ((:eval* io eval*) io (str "(shadow.cljs.devtools.api/nrepl-select :" build-key ")") "user")
@@ -187,7 +186,6 @@
   Throws:
     IOException if the resource file cannot be found or read"
   []
-  "Load the CLJS test reporter code from external file."
   (slurp (io/resource "io/nextdoc/cljs/test_reporter.cljs")))
 
 (defn- install-test-reporter
@@ -207,7 +205,6 @@
   Throws:
     ex-info if the reporter installation fails"
   [io]
-  "Install the test reporter that captures results and failure details in global state."
   (let [reporter-code (get-reporter-code)
         reporter-frames ((:eval* io eval*) io reporter-code "cljs.user")
         reporter-val (last-val reporter-frames)]
@@ -230,7 +227,6 @@
   Throws:
     ex-info if any namespace fails to load"
   [io test-namespaces]
-  "Require all the test namespaces for execution."
   (let [require-expr (str "(do " 
                          (->> test-namespaces
                               (map #(format "(require '%s :reload)" %))
@@ -257,7 +253,6 @@
   Throws:
     ex-info if test execution fails to start"
   [io test-namespaces]
-  "Start the test execution (non-blocking)."
   (let [run-expr (str "(do (cljs.test/run-tests " 
                      (->> test-namespaces (map #(str "'" %)) (clojure.string/join " "))
                      ") :pending)")
@@ -278,7 +273,6 @@
   Args:
     m - Test result map or other data structure to display"
   [m]
-  "Pretty print test results for terminal display."
   (println "\n<results>")
   (if (map? m)
     (pprint/pprint m)
@@ -299,7 +293,6 @@
   Returns:
     Map with :values (test counts), :out (formatted output lines), :err (error lines)"
   [m frames]
-  "Format test results for return to the main test runner."
   (let [base-out (last-out frames)
         base-err (last-err frames)
         base-lines (if (empty? base-out) [] [base-out])
@@ -327,7 +320,6 @@
   Throws:
     ex-info if timeout is reached before results are available"
   [io]
-  "Poll for test results with timeout and return the final result map."
   (let [deadline (+ (System/currentTimeMillis) 30000)] ; 30s timeout
     (log "Polling for test results...")
     (loop [attempt 0]
@@ -435,8 +427,8 @@
     Enhanced result map with :out and :err from session accumulation"
   [result out* err*]
   (-> result
-      (assoc :out (let [s (str @out*)] (cond-> [] (not (empty? s)) (conj s))))
-      (assoc :err (let [s (str @err*)] (cond-> [] (not (empty? s)) (conj s))))))
+      (assoc :out (let [s (str @out*)] (cond-> [] (seq s) (conj s))))
+      (assoc :err (let [s (str @err*)] (cond-> [] (seq s) (conj s))))))
 
 (defn run-shadow-tests
   "Main entry point for running ClojureScript tests via Shadow-CLJS nREPL.

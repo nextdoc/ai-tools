@@ -6,6 +6,7 @@
     [babashka.nrepl-client :as nrepl]
     [clojure.edn :as edn]
     [clojure.java.io :as io]
+    [clojure.pprint :as pprint]
     [clojure.string :as str]
     [io.nextdoc.shadow-nrepl :as shadow-nrepl]))
 
@@ -66,7 +67,7 @@
               (throw (ex-info "Failed to retrieve test results" {})))))
         (do
           (println "Reload failed...")
-          (clojure.pprint/pprint reload-result))))
+          (pprint/pprint reload-result))))
     (catch Throwable t
       (.printStackTrace t))))
 
@@ -77,13 +78,13 @@
   [{:keys [exit?]
     :or   {exit? true}}]
   (fn handle-parse-error
-    [{:keys [spec type cause msg option] :as data}]
+    [{:keys [_spec type cause msg option] :as _data}]
     (if (= :org.babashka/cli type)
       (case cause
         :require (println (format "Missing required argument:\n%s"
-                                  (cli/format-opts {:spec (select-keys spec [option])})))
+                                   (cli/format-opts {:spec (select-keys _spec [option])})))
         (println msg))
-      (throw (ex-info msg data)))
+      (throw (ex-info msg _data)))
     (when exit? (System/exit 1))))
 
 (defn parse-jvm-tests-args
@@ -135,7 +136,7 @@
         return-code)
       (do
         (println "Test invocation failed")
-        (clojure.pprint/pprint result)
+        (pprint/pprint result)
         1))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -218,5 +219,5 @@
         return-code)
       (do
         (println "CLJS test invocation failed")
-        (clojure.pprint/pprint result)
+        (pprint/pprint result)
         1))))
