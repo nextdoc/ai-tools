@@ -1,22 +1,30 @@
 # Babashka AI Coding Tools
 
-A Babashka task for running tests via nREPL connections.
+Babashka tasks for running tests via nREPL connections in both JVM Clojure and ClojureScript environments.
 
 ## Overview
 
-Provides utilities for connecting to nREPL servers and running tests.
+Provides utilities for connecting to nREPL servers and running tests in both JVM Clojure and ClojureScript (via Shadow-CLJS) environments.
 
-Runs in Babashka, making it fast & easy for Agents to run tests from the command line.
+Runs in Babashka, making it fast & easy for AI agents to run tests from the command line with minimal setup.
 
-Can be used with Aider which allows for focused context and minimizes token consumption.
+Supports both traditional JVM test workflows and modern ClojureScript development with Shadow-CLJS builds.
 
 ## Features
 
+### JVM Clojure (`nrepl:test`)
 - Connect to nREPL servers
-- Reload namespaces before running tests
+- Reload namespaces before running tests using tools.namespace
 - Capture reload errors
 - Run tests in specified namespaces
 - Capture test output (stdout/stderr)
+
+### ClojureScript via Shadow-CLJS (`nrepl:test-shadow`)
+- Connect to Shadow-CLJS nREPL servers
+- Switch to specified Shadow-CLJS builds with runtime verification
+- Custom test reporter for detailed failure capture
+- Async test execution with polling-based result collection
+- Pretty-printed results in XML tags for easy parsing
 
 ## Unique value proposition
 
@@ -30,7 +38,18 @@ Why use this instead of other options?
 
 ## Installation
 
-The REPL where your tests will run must have [tools.namespace](https://github.com/clojure/tools.namespace) installed
+### Prerequisites
+
+**For JVM Clojure testing:**
+- The REPL where your tests will run must have [tools.namespace](https://github.com/clojure/tools.namespace) installed
+- Active nREPL server (usually writes port to `.nrepl-port`)
+
+**For ClojureScript testing:**
+- Running Shadow-CLJS build with active nREPL server
+- Shadow-CLJS writes nREPL port to `.shadow-cljs/nrepl.port`
+- No additional dependencies required (uses Shadow-CLJS hot reloading)
+
+### Setup
 
 Add the following dependencies to your bb.edn (check for latest commit)
 
@@ -41,50 +60,90 @@ nextdoc/ai-tools {:git/url "https://github.com/nextdoc/ai-tools.git"
                   :git/sha "f30c664e96af56e8392ff4bd1fca6147d11f589a"}
 ```
 
-Add this task (from the bb.edn in this project) to your bb.edn
+Add both tasks (from the bb.edn in this project) to your bb.edn
 
 ```clojure
-nrepl:test {:requires [[io.nextdoc.tools :as tools]]
-            :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
-            :task     (System/exit (tools/run-tests-task *command-line-args*))}
+nrepl:test        {:requires [[io.nextdoc.tools :as tools]]
+                   :doc      "Run a test in the JVM using an nrepl connection i.e. fast test runner from cli"
+                   :task     (System/exit (tools/run-tests-task *command-line-args*))}
+
+nrepl:test-shadow {:requires [[io.nextdoc.tools :as tools]]
+                   :doc      "Run a test in Shadow-CLJS using an nrepl connection for ClojureScript testing"
+                   :task     (System/exit (tools/run-cljs-tests-task *command-line-args*))}
 ```
 
-Run the task to confirm installation and see the options
+Run the tasks to confirm installation and see the options
 
 ```bash
-bb nrepl:test
+bb nrepl:test          # JVM Clojure
+bb nrepl:test-shadow   # ClojureScript
 ```
 
 ### Command Line Options
 
+#### JVM Clojure (`nrepl:test`)
 - `-n, --namespaces`: Comma-separated list of test namespaces to run (required)
 - `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".nrepl-port")
 
 The --directories option is useful if some of your sources fail to reload cleanly using tools.namespace.
 
+#### ClojureScript (`nrepl:test-shadow`)
+- `-n, --namespaces`: Comma-separated list of test namespaces to run (required)
+- `-b, --build-id`: Shadow-CLJS build ID to connect to (optional, e.g., dev, test)
+- `-p, --port-file`: Path to the file containing the nREPL port (default: ".shadow-cljs/nrepl.port")
+
 ## Usage
 
-The task is intended to be used with AI coding agents as a test runner.
+The tasks are intended to be used with AI coding agents as test runners.
 
-If using a coding agent that uses markdown to know about the test runner,
+### When to Use Which
+
+- **Use `nrepl:test`** for JVM Clojure testing with traditional REPL workflows
+- **Use `nrepl:test-shadow`** for ClojureScript testing via Shadow-CLJS builds
+
+### Agent Instructions
+
+If using a coding agent that uses markdown to know about the test runners,
 add this text to your agent instructions...
 
 ```
+# JVM Clojure tests
 Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
+
+# ClojureScript tests  
+Run tests using this command `bb nrepl:test-shadow -n <fully qualified test namespace>`
+Optionally specify build: `bb nrepl:test-shadow -n <namespace> -b <build-id>`
 ```
 
-Ensure the REPL in your project is started.
+Ensure the appropriate REPL/build is running:
+- **JVM**: Start your nREPL server (port in `.nrepl-port`)
+- **ClojureScript**: Start Shadow-CLJS build (port in `.shadow-cljs/nrepl.port`)
 
-## Test runner
+## Test Runners
 
-Run the task with valid options to run your test(s)
+### JVM Clojure Examples
+```bash
+bb nrepl:test -n my.project.core-test
+bb nrepl:test -n my.project.core-test,my.project.utils-test -d src,dev
+```
 
-The task will return a zero exit code if the tests pass.
+### ClojureScript Examples
+```bash
+bb nrepl:test-shadow -n my.project.core-test
+bb nrepl:test-shadow -n my.project.core-test -b dev
+bb nrepl:test-shadow -n my.project.core-test,my.project.utils-test
+```
+
+### Exit Codes and Output
+
+Both tasks will return a zero exit code if the tests pass.
 The return code is used by most coding agents to determine if a test passed or not.
 
 If standard out or standard error is present this will be echoed to the terminal.
 This allows coding agents to see logs and exceptions from test runs.
+
+ClojureScript test results are wrapped in `<results>` XML tags for easier parsing by external tools.
 
 ## Workflows
 
@@ -107,7 +166,9 @@ In your .aider.conf.yaml file you will want...
 ```yaml
 auto-commits: false
 watch-files: true
-test-cmd: bb nrepl:test -n your.test.namespace
+# Choose the appropriate test command for your project:
+test-cmd: bb nrepl:test -n your.test.namespace        # For JVM Clojure
+# test-cmd: bb nrepl:test-shadow -n your.test.namespace # For ClojureScript
 auto-test: true
 yes-always: true
 ```
@@ -145,7 +206,7 @@ When using this TDD style workflow, the following features provide increased ben
 
 - Context is automatically managed and compacted when required
 - More tools are available
-- The agent can adjust the Babashka task invocation on its own or with your instruction
+- The agent can adjust the Babashka task invocation on its own or with your instruction i.e. run different tests without restart
 
 Add the following instruction to your CLAUDE.md
 
@@ -156,7 +217,11 @@ Add the following instruction to your CLAUDE.md
 
 # More information on how to use this task is available at https://raw.githubusercontent.com/nextdoc/ai-tools/refs/heads/master/README.md
 
+# JVM Clojure tests
 bb nrepl:test -n <Fully qualified test namespace>
+
+# ClojureScript tests (Shadow-CLJS)
+bb nrepl:test-shadow -n <Fully qualified test namespace>
 ```
 
 This allows you to instruct the agent to use **TDD mode** with a specific test or fiddle namespace.
