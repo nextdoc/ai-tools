@@ -1,6 +1,12 @@
 (ns io.nextdoc.tools
   "Tools for invoking tests via nREPL connections.
-   Supports both JVM (Clojure) and ShadowCLJS (ClojureScript) environments."
+   Supports both JVM (Clojure) and ShadowCLJS (ClojureScript) environments.
+   
+   Key features:
+   - Run individual test functions using slash notation (namespace/test-function)
+   - Smart filtering to avoid duplicate test execution
+   - Stack trace filtering for cleaner error output
+   - Mixed mode execution (individual tests + full namespaces)"
   (:require
     [babashka.cli :as cli]
     [babashka.nrepl-client :as nrepl]
@@ -9,6 +15,9 @@
     [clojure.pprint :as pprint]
     [clojure.string :as str]
     [io.nextdoc.shadow-nrepl :as shadow-nrepl]))
+
+;; Forward declaration for stack trace filtering function used in execute-test-code
+(declare clean-test-output)
 
 (defn read-port
   "SHARED: Reads a port number from a file and returns it as an integer.
@@ -21,6 +30,7 @@
 
 (defn- parse-test-entries
   "Parses namespace entries and separates them into namespaces and individual tests.
+   Uses slash notation to identify individual tests (e.g., 'my.ns/test-function').
    Returns a map with :namespaces and :individual-tests keys."
   [entries]
   (reduce (fn [acc entry]
@@ -61,29 +71,49 @@
 
 (defn- execute-test-code
   "Executes test code via nREPL and returns the parsed result.
+   Captures all output (including test errors) for filtering.
    Returns nil if the execution fails, which will be filtered out during result combination."
   [port code]
-  (println "\n===== Executing test code: =====")
-  (println code)
-  (println "=================================\n")
+  ;; Uncomment for debugging:
+  ;; (println "\n===== Executing test code: =====")
+  ;; (println code)
+  ;; (println "=================================\n")
   (try
-    (let [response (nrepl/eval-expr {:port port :expr code})
-          {:keys [vals err out]} response]
-      (println "Response - vals:" vals "err:" err "out:" out)
-      (when err
-        (println "nREPL error:" err))
-      (when out
-        (println "nREPL output:" out))
+    ;; Capture all output from nREPL (including what eval-expr prints to *out*)
+    (let [output-buffer (java.io.StringWriter.)
+          result (binding [*out* output-buffer]
+                   ;; eval-expr prints server output to *out*, which we're capturing
+                   (let [response (nrepl/eval-expr {:port port :expr code})
+                         {:keys [vals err out]} response]
+                     ;; Return both the response and captured output
+                     {:response response
+                      :captured-output (str output-buffer)
+                      :vals vals
+                      :err err 
+                      :out out}))
+          {:keys [captured-output vals err]} result]
+      
+      ;; Print the filtered/cleaned captured output
+      (when (not (str/blank? captured-output))
+        (let [cleaned-lines (clean-test-output captured-output)]
+          (doseq [line cleaned-lines]
+            (println line))))
+      
+      ;; Uncomment for debugging:
+      ;; (when err
+      ;;   (println "nREPL error:" err))
+      ;; (when out
+      ;;   (println "nREPL structured output:" out))
+      
+      ;; Parse and return the test result
       (cond
         (and vals (seq vals)) (edn/read-string (first vals))
         err nil
         :else (do
                 (println "Warning: No result from nREPL execution")
-                (println "Full response:" response)
                 nil)))
     (catch Exception e
       (println "Failed to execute test code:" (.getMessage e))
-      (println "Stack trace:" (.printStackTrace e))
       nil)))
 
 (defn- merge-test-result
@@ -106,9 +136,175 @@
           {:test 0 :pass 0 :fail 0 :error 0 :out [] :err []}
           (remove nil? results)))
 
+;; Stack trace filtering utilities for cleaner test output
+;; These utilities filter stack traces from nREPL test execution to remove:
+;; - Java/Clojure internals (java.lang.*, clojure.lang.*, clojure.test$*)  
+;; - Babashka/SCI internals (sci.lang.*, sci.impl.*, babashka.main$*)
+;; - Generated evaluation forms (user$eval*)
+;; 
+;; The filtering captures nREPL output during eval-expr execution and processes
+;; it before displaying to the user, providing much cleaner error diagnostics.
+
+
+(defn- clean-stack-trace
+  "Cleans and formats a stack trace for more readable test output.
+   Removes Java/Clojure/Babashka internals, detects recursion patterns, 
+   limits output length, and adds filtering indicators showing how many frames were removed."
+  [stack-trace-lines]
+  (let [;; Parse stack frames from the string output, handling various formats
+        raw-frames (->> stack-trace-lines
+                        (map str/trim)
+                        (filter (fn [line]
+                                  (or (str/starts-with? line "at ")
+                                      (and (re-find #"[\w\$]+" line)
+                                           (re-find #"\(" line)))))
+                        (map (fn [line]
+                               (if (str/starts-with? line "at ")
+                                 (subs line 3)  ; Remove "at " prefix
+                                 line))))
+        
+        ;; Separate filtering - keep important frames
+        filtered-frames (->> raw-frames
+                             (remove (fn [frame]
+                                       (or 
+                                         ;; Filter out Clojure/Java internals
+                                         (str/includes? frame "java.lang.Exception")
+                                         (str/includes? frame "java.lang.RuntimeException") 
+                                         (str/includes? frame "clojure.lang.ExceptionInfo")
+                                         (str/includes? frame "clojure.lang.AFn")
+                                         (str/includes? frame "clojure.lang.RestFn")
+                                         (str/includes? frame "clojure.lang.LazySeq")
+                                         (str/includes? frame "clojure.lang.RT")
+                                         (str/includes? frame "clojure.lang.Compiler")
+                                         (str/includes? frame "clojure.test$")
+                                         (str/includes? frame "clojure.core$apply")
+                                         (str/includes? frame "clojure.core$map")
+                                         (str/includes? frame "clojure.core$eval")
+                                         (str/includes? frame "clojure.core$with_bindings")
+                                         (str/includes? frame "clojure.main$repl")
+                                         
+                                         ;; Filter out Babashka internals (SCI - Small Clojure Interpreter)
+                                         (str/includes? frame "sci.lang.")
+                                         (str/includes? frame "sci.impl.")
+                                         (str/includes? frame "sci.core$")
+                                         (str/includes? frame "babashka.main$")
+                                         (str/starts-with? frame "user$eval") ; Generated eval forms
+                                         ))))
+        
+        ;; Check for recursion pattern
+        recursion? (and (> (count filtered-frames) 20)
+                       (let [sample (take 10 filtered-frames)]
+                         (some (fn [i] 
+                                 (= sample (take 10 (drop (* i 10) filtered-frames))))
+                               (range 1 3))))
+        
+        ;; Calculate filtering stats
+        filtered-count (- (count raw-frames) (count filtered-frames))
+        
+        ;; Format output with filtering information
+        header (if (pos? filtered-count)
+                 (str "    Stack trace (cleaned - " filtered-count " internal frames filtered):")
+                 "    Stack trace:")
+        
+        cleaned-frames (if recursion?
+                         (concat [header]
+                                (map #(str "    " %) (take 8 filtered-frames))
+                                ["    ... [Recursion detected - pattern repeats] ..."]
+                                (map #(str "    " %) (take-last 2 filtered-frames)))
+                         (concat [header]
+                                (map #(str "    " %) (take 20 filtered-frames))))]
+    cleaned-frames))
+
+(defn- clean-test-output
+  "Cleans test output to remove excessive stack traces and noise."
+  [output-lines]
+  (let [lines (if (string? output-lines)
+                (str/split-lines output-lines)
+                output-lines)]
+    (loop [result []
+           remaining lines
+           in-stack-trace? false
+           stack-trace-buffer []
+           error-header nil]
+      (if (empty? remaining)
+        (cond
+          ;; If we ended while processing stack trace, clean and add it
+          in-stack-trace?
+          (-> result
+              (into (clean-stack-trace stack-trace-buffer))
+              (conj ""))  ; Add blank line after stack trace
+          
+          ;; Otherwise return as-is
+          :else result)
+        
+        (let [line (first remaining)
+              trimmed (str/trim line)]
+          (cond
+            ;; Testing header line - always keep
+            (str/starts-with? trimmed "Testing ")
+            (recur (conj result "" line) (rest remaining) false [] nil)
+            
+            ;; Start of error or failure - save header
+            (or (str/starts-with? trimmed "ERROR in")
+                (str/starts-with? trimmed "FAIL in"))
+            (recur (conj result "" line) (rest remaining) false [] line)
+            
+            ;; Error description lines after ERROR/FAIL
+            (and error-header 
+                 (not (str/starts-with? trimmed "expected:"))
+                 (not (str/starts-with? trimmed "actual:")))
+            (recur (conj result line) (rest remaining) false [] error-header)
+            
+            ;; Expected line - keep and prepare for stack trace
+            (str/starts-with? trimmed "expected:")
+            (recur (conj result line) (rest remaining) false [] nil)
+            
+            ;; Actual line - keep and start collecting stack trace
+            (str/starts-with? trimmed "actual:")
+            (recur (conj result line) (rest remaining) true [] nil)
+            
+            ;; Stack trace lines - collect in buffer
+            (and in-stack-trace?
+                 (or (str/starts-with? trimmed "at ")
+                     (and (not (str/blank? trimmed))
+                          (not (str/starts-with? trimmed "Ran "))
+                          (not (str/starts-with? trimmed "Testing "))
+                          (not (str/starts-with? trimmed "ERROR "))
+                          (not (str/starts-with? trimmed "FAIL ")))))
+            (recur result (rest remaining) true (conj stack-trace-buffer line) nil)
+            
+            ;; End of stack trace - clean buffer and add to result
+            (and in-stack-trace? 
+                 (or (str/blank? trimmed)
+                     (str/starts-with? trimmed "Ran ")
+                     (str/starts-with? trimmed "ERROR ")
+                     (str/starts-with? trimmed "FAIL ")
+                     (str/starts-with? trimmed "Testing ")))
+            (let [cleaned (clean-stack-trace stack-trace-buffer)
+                  new-result (into result cleaned)]
+              ;; Re-process current line as it's not part of stack trace
+              (recur new-result remaining false [] nil))
+            
+            ;; Test summary line - always keep
+            (re-find #"Ran \d+ tests containing \d+ assertions" trimmed)
+            (recur (conj result "" line) (rest remaining) false [] nil)
+            
+            ;; Regular line
+            :else
+            (recur (if (str/blank? trimmed) 
+                     result  ; Skip extra blank lines
+                     (conj result line)) 
+                   (rest remaining) 
+                   false 
+                   [] 
+                   nil)))))))
+
 (defn run-tests
   "JVM: Runs tests in the specified test namespaces using an nREPL connection.
+   Supports both full namespaces and individual test functions using slash notation.
    Reloads the test namespaces before running tests using clojure.tools.namespace.
+   Applies smart filtering to avoid duplicate execution when both individual tests 
+   and their containing namespaces are specified. Stack traces are filtered for readability.
    Returns a map containing test results, stdout, and stderr.
    This function is specific to JVM/Clojure environments."
   [port directories test-entries]
@@ -147,7 +343,6 @@
                 ;; we only run "my.ns/test1" individually and skip the full "my.ns" namespace.
                 individual-test-namespaces (set (map :namespace individual-tests))
                 filtered-namespaces (remove individual-test-namespaces namespaces)
-                ;; Execute tests separately and combine results
                 ;; We use separate nREPL evaluations for namespaces and individual tests,
                 ;; then combine the results. For individual tests, we run each one separately
                 ;; to avoid nREPL issues with multiple test-var calls in one expression.
@@ -225,7 +420,8 @@
 (defn run-tests-task
   "JVM: Main entry point for the JVM test runner task.
    Parses command line arguments, connects to the nREPL server,
-   runs the specified tests, and returns an exit code based on test results.
+   runs the specified tests (supporting both namespaces and individual test functions),
+   applies stack trace filtering, and returns an exit code based on test results.
    This function is specific to JVM/Clojure environments."
   [args]
   (let [{:keys [namespaces directories port-file]} (parse-jvm-tests-args args)
@@ -234,9 +430,21 @@
     (if (seq (:values result))
       (let [{:keys [fail error]} (:values result)
             return-code (reduce + [fail error])]
-        ; TODO JVM: Elide irrelevant stack trace lines when errors occur. This will reduce the context size during iteration.
-        (some->> (:out result) (remove empty?) (seq) (str/join "\n") (#(str "<stdout>\n" % "\n</stdout>")) println)
-        (some->> (:err result) (remove empty?) (seq) (str/join "\n") (#(str "<stderr>\n" % "\n</stderr>")) println)
+        ;; Clean and output test results with filtered stack traces
+        (some->> (:out result) 
+                 (remove empty?) 
+                 seq 
+                 clean-test-output 
+                 (str/join "\n") 
+                 (#(str "<stdout>\n" % "\n</stdout>")) 
+                 println)
+        (some->> (:err result) 
+                 (remove empty?) 
+                 seq 
+                 clean-test-output 
+                 (str/join "\n") 
+                 (#(str "<stderr>\n" % "\n</stderr>")) 
+                 println)
         return-code)
       (do
         (println "Test invocation failed")
