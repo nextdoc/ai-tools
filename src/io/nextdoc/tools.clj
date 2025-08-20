@@ -43,42 +43,47 @@
              :err (str *err*)}))"))
 
 (defn- make-var-reference
-  "Creates a var reference string for a test."
+  "Creates a var reference string for a test.
+   Uses the test name as-is since Clojure allows hyphens in function names."
   [{:keys [namespace test-name]}]
-  (str "#'" namespace "/" test-name))
+  (str "#'" namespace "/" (name test-name)))
 
 (defn- generate-individual-test-code
-  "Generates the code string for running individual test functions."
-  [individual-tests]
+  "Generates the code string for running a single individual test function using run-test-var."
+  [{:keys [namespace test-name] :as test}]
   (str "(binding [*out* (java.io.StringWriter.)
                   *err* (java.io.StringWriter.)]
-          (do " 
-       (str/join " " (map #(str "(require '" (:namespace %) ")") individual-tests))
-       " (let [result " 
-       (if (= 1 (count individual-tests))
-         (let [test (first individual-tests)]
-           (str "(clojure.test/run-test-var " (make-var-reference test) ")"))
-         (str "(clojure.test/test-vars [" 
-              (str/join " " (map make-var-reference individual-tests)) 
-              "])"))
-       "]
-              {:result result
-               :out (str *out*)
-               :err (str *err*)}))))"))
+          (do (require '" namespace ")
+              (let [result (clojure.test/run-test-var " (make-var-reference test) ")]
+                {:result result
+                 :out (str *out*)
+                 :err (str *err*)})))"))
 
 (defn- execute-test-code
   "Executes test code via nREPL and returns the parsed result.
    Returns nil if the execution fails, which will be filtered out during result combination."
   [port code]
+  (println "\n===== Executing test code: =====")
+  (println code)
+  (println "=================================\n")
   (try
-    (let [{:keys [vals err]} (nrepl/eval-expr {:port port :expr code})]
+    (let [response (nrepl/eval-expr {:port port :expr code})
+          {:keys [vals err out]} response]
+      (println "Response - vals:" vals "err:" err "out:" out)
+      (when err
+        (println "nREPL error:" err))
+      (when out
+        (println "nREPL output:" out))
       (cond
-        vals (edn/read-string (first vals))
-        err (do (println "nREPL execution error:" err)
-                nil)
-        :else nil))
+        (and vals (seq vals)) (edn/read-string (first vals))
+        err nil
+        :else (do
+                (println "Warning: No result from nREPL execution")
+                (println "Full response:" response)
+                nil)))
     (catch Exception e
       (println "Failed to execute test code:" (.getMessage e))
+      (println "Stack trace:" (.printStackTrace e))
       nil)))
 
 (defn- merge-test-result
@@ -144,14 +149,14 @@
                 filtered-namespaces (remove individual-test-namespaces namespaces)
                 ;; Execute tests separately and combine results
                 ;; We use separate nREPL evaluations for namespaces and individual tests,
-                ;; then combine the results. This approach is cleaner than trying to build
-                ;; a complex single expression that handles both cases.
+                ;; then combine the results. For individual tests, we run each one separately
+                ;; to avoid nREPL issues with multiple test-var calls in one expression.
                 results (cond-> []
                           (seq filtered-namespaces)
                           (conj (execute-test-code port (generate-namespace-test-code filtered-namespaces)))
                           
                           (seq individual-tests)
-                          (conj (execute-test-code port (generate-individual-test-code individual-tests))))
+                          (into (map #(execute-test-code port (generate-individual-test-code %)) individual-tests)))
                 
                 ;; Combine all results
                 combined-result (combine-test-results results)]
