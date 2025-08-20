@@ -16,7 +16,7 @@ Supports both traditional JVM test workflows and modern ClojureScript developmen
 - Connect to nREPL servers
 - Reload namespaces before running tests using tools.namespace
 - Capture reload errors
-- Run tests in specified namespaces
+- Run tests in specified namespaces or individual test functions
 - Capture test output (stdout/stderr)
 
 ### ClojureScript via Shadow-CLJS (`nrepl:test-shadow`)
@@ -82,11 +82,16 @@ bb nrepl:test-shadow   # ClojureScript
 ### Command Line Options
 
 #### JVM Clojure (`nrepl:test`)
-- `-n, --namespaces`: Comma-separated list of test namespaces to run (required)
+- `-n, --namespaces`: Comma-separated list of test namespaces or individual tests to run (required)
+  - Full namespace: `my.project.core-test`
+  - Individual test: `my.project.core-test/test-function-name`
+  - Mixed: `my.project.core-test/specific-test,my.project.utils-test`
 - `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".nrepl-port")
 
 The --directories option is useful if some of your sources fail to reload cleanly using tools.namespace.
+
+**Note:** Individual test execution is currently only supported for JVM Clojure tests, not ClojureScript.
 
 #### ClojureScript (`nrepl:test-shadow`)
 - `-n, --namespaces`: Comma-separated list of test namespaces to run (required)
@@ -110,6 +115,7 @@ add this text to your agent instructions...
 ```
 # JVM Clojure tests
 Run tests using this command `bb nrepl:test -n <fully qualified test namespace>`
+Run individual test: `bb nrepl:test -n <namespace>/<test-function>`
 
 # ClojureScript tests  
 Run tests using this command `bb nrepl:test-shadow -n <fully qualified test namespace>`
@@ -124,7 +130,19 @@ Ensure the appropriate REPL/build is running:
 
 ### JVM Clojure Examples
 ```bash
+# Run all tests in a namespace
 bb nrepl:test -n my.project.core-test
+
+# Run a specific test function
+bb nrepl:test -n my.project.core-test/test-addition
+
+# Run multiple test functions from the same namespace
+bb nrepl:test -n my.project.core-test/test-addition,my.project.core-test/test-subtraction
+
+# Mix individual tests and full namespaces
+bb nrepl:test -n my.project.core-test/specific-test,my.project.utils-test
+
+# With directory reloading
 bb nrepl:test -n my.project.core-test,my.project.utils-test -d src,dev
 ```
 
@@ -219,6 +237,8 @@ Add the following instruction to your CLAUDE.md
 
 # JVM Clojure tests
 bb nrepl:test -n <Fully qualified test namespace>
+# Or run individual test:
+bb nrepl:test -n <namespace>/<test-function>
 
 # ClojureScript tests (Shadow-CLJS)
 bb nrepl:test-shadow -n <Fully qualified test namespace>
