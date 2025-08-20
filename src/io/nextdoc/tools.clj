@@ -71,9 +71,10 @@
 
 (defn- execute-test-code
   "Executes test code via nREPL and returns the parsed result.
-   Captures all output (including test errors) for filtering.
+   Captures all output (including test errors) for optional filtering.
+   When filter? is true, applies stack trace filtering for cleaner output.
    Returns nil if the execution fails, which will be filtered out during result combination."
-  [port code]
+  [port code filter?]
   ;; Uncomment for debugging:
   ;; (println "\n===== Executing test code: =====")
   ;; (println code)
@@ -93,11 +94,13 @@
                       :out out}))
           {:keys [captured-output vals err]} result]
       
-      ;; Print the filtered/cleaned captured output
+      ;; Print the captured output (filtered or unfiltered based on filter? flag)
       (when (not (str/blank? captured-output))
-        (let [cleaned-lines (clean-test-output captured-output)]
-          (doseq [line cleaned-lines]
-            (println line))))
+        (if filter?
+          (let [cleaned-lines (clean-test-output captured-output)]
+            (doseq [line cleaned-lines]
+              (println line)))
+          (print captured-output)))
       
       ;; Uncomment for debugging:
       ;; (when err
@@ -304,10 +307,10 @@
    Supports both full namespaces and individual test functions using slash notation.
    Reloads the test namespaces before running tests using clojure.tools.namespace.
    Applies smart filtering to avoid duplicate execution when both individual tests 
-   and their containing namespaces are specified. Stack traces are filtered for readability.
+   and their containing namespaces are specified. Stack traces can be filtered for readability.
    Returns a map containing test results, stdout, and stderr.
    This function is specific to JVM/Clojure environments."
-  [port directories test-entries]
+  [port directories test-entries filter?]
   (try
 
     ; JVM: Reload any updated source using clojure.tools.namespace
@@ -348,10 +351,10 @@
                 ;; to avoid nREPL issues with multiple test-var calls in one expression.
                 results (cond-> []
                           (seq filtered-namespaces)
-                          (conj (execute-test-code port (generate-namespace-test-code filtered-namespaces)))
+                          (conj (execute-test-code port (generate-namespace-test-code filtered-namespaces) filter?))
                           
                           (seq individual-tests)
-                          (into (map #(execute-test-code port (generate-individual-test-code %)) individual-tests)))
+                          (into (map #(execute-test-code port (generate-individual-test-code %) filter?) individual-tests)))
                 
                 ;; Combine all results
                 combined-result (combine-test-results results)]
@@ -412,7 +415,13 @@
                                             :alias    :p
                                             :validate (fn [file]
                                                         (and (string? file)
-                                                             (.exists (io/file file))))}}
+                                                             (.exists (io/file file))))}
+                              :filter      {:ref      "<boolean>"
+                                            :desc     "Filter stack traces to remove internal frames (default: true)"
+                                            :require  false
+                                            :default  true
+                                            :alias    :f
+                                            :coerce   :boolean}}
                    :error-fn (handle-parse-error {:exit? exit?})}))
 
 (comment (parse-jvm-tests-args ["-n" "a.b.c" "-d" "dev,src"] {:exit? false}))
@@ -421,27 +430,27 @@
   "JVM: Main entry point for the JVM test runner task.
    Parses command line arguments, connects to the nREPL server,
    runs the specified tests (supporting both namespaces and individual test functions),
-   applies stack trace filtering, and returns an exit code based on test results.
+   optionally applies stack trace filtering, and returns an exit code based on test results.
    This function is specific to JVM/Clojure environments."
   [args]
-  (let [{:keys [namespaces directories port-file]} (parse-jvm-tests-args args)
+  (let [{:keys [namespaces directories port-file] filter? :filter} (parse-jvm-tests-args args)
         port (read-port port-file)
-        result (run-tests port directories namespaces)]
+        result (run-tests port directories namespaces filter?)]
     (if (seq (:values result))
       (let [{:keys [fail error]} (:values result)
             return-code (reduce + [fail error])]
-        ;; Clean and output test results with filtered stack traces
+        ;; Output test results (filtered or unfiltered based on filter option)
         (some->> (:out result) 
                  (remove empty?) 
                  seq 
-                 clean-test-output 
+                 ((if filter? clean-test-output identity))
                  (str/join "\n") 
                  (#(str "<stdout>\n" % "\n</stdout>")) 
                  println)
         (some->> (:err result) 
                  (remove empty?) 
                  seq 
-                 clean-test-output 
+                 ((if filter? clean-test-output identity))
                  (str/join "\n") 
                  (#(str "<stderr>\n" % "\n</stderr>")) 
                  println)
@@ -504,7 +513,13 @@
                                            :alias    :p
                                            :validate (fn [file]
                                                        (and (string? file)
-                                                            (.exists (io/file file))))}}
+                                                            (.exists (io/file file))))}
+                              :filter     {:ref      "<boolean>"
+                                           :desc     "Filter stack traces to remove internal frames (default: true)"
+                                           :require  false
+                                           :default  true
+                                           :alias    :f
+                                           :coerce   :boolean}}
                    :error-fn (handle-parse-error {:exit? exit?})}))
 
 
@@ -513,7 +528,7 @@
    Parses command line arguments, connects to the Shadow-CLJS nREPL server,
    runs the specified tests, and returns an exit code based on test results."
   [args]
-  (let [{:keys [namespaces build-id port-file]} (parse-cljs-tests-args args)
+  (let [{:keys [namespaces build-id port-file] filter? :filter} (parse-cljs-tests-args args)
         port (read-port port-file)
         result (try
                  ;; Use the custom bencode client for proper session management

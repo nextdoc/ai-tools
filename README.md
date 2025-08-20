@@ -18,6 +18,7 @@ Supports both traditional JVM test workflows and modern ClojureScript developmen
 - Capture reload errors
 - Run tests in specified namespaces or individual test functions
 - Capture test output (stdout/stderr)
+- Smart stack trace filtering (removes Java/Clojure/Babashka internals) with transparency indicators
 
 ### ClojureScript via Shadow-CLJS (`nrepl:test-shadow`)
 - Connect to Shadow-CLJS nREPL servers
@@ -88,6 +89,8 @@ bb nrepl:test-shadow   # ClojureScript
   - Mixed: `my.project.core-test/specific-test,my.project.utils-test`
 - `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".nrepl-port")
+- `-f, --filter`: Filter stack traces to remove internal frames (default: true)
+  - Set to `false` to see full unfiltered stack traces for debugging
 
 The --directories option is useful if some of your sources fail to reload cleanly using tools.namespace.
 
@@ -97,6 +100,7 @@ The --directories option is useful if some of your sources fail to reload cleanl
 - `-n, --namespaces`: Comma-separated list of test namespaces to run (required)
 - `-b, --build-id`: Shadow-CLJS build ID to connect to (optional, e.g., dev, test)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".shadow-cljs/nrepl.port")
+- `-f, --filter`: Accepted for consistency but has no effect (ClojureScript output is not filtered)
 
 ## Usage
 
