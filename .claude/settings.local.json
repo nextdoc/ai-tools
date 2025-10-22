@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bb nrepl:test-shadow:*)",
+      "WebFetch(domain:shadow-cljs.github.io)",
+      "Bash(clj-kondo:*)",
+      "Bash(bb nrepl:test:*)",
+      "WebSearch",
+      "WebFetch(domain:clojuredocs.org)",
+      "WebFetch(domain:book.babashka.org)",
+      "Bash(bb:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": false
+}

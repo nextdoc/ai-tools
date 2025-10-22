@@ -1,0 +1,14 @@
+Testing com.example.formats-test
+
+ERROR in (test-frame-formats) (formats_test.clj:5)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: java.lang.NullPointerException: Cannot read field
+ at com.example.service.DataProcessor.process (DataProcessor.java:42)
+    com.example.adapter.ServiceAdapter$invoke.invokeStatic (service_adapter.clj:78)
+    com.example.adapter.ServiceAdapter$invoke.invoke (service_adapter.clj:75)
+ at java.util.HashMap.get (HashMap.java:556)
+    com.example.formats_test$fn__11111.invokeStatic (formats_test.clj:7)
+
+Ran 1 tests containing 1 assertions.
+0 failures, 1 errors.

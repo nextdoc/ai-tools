@@ -241,7 +241,7 @@
                                 (map #(str "    " %) (take 20 filtered-frames))))]
     cleaned-frames))
 
-(defn- clean-test-output
+(defn clean-test-output
   "Cleans test output to remove excessive stack traces and noise.
    Preserves exception data (like Malli validation errors) that appears
    between the 'actual:' line and the start of the stack trace."

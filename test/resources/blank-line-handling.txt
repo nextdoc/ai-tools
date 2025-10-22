@@ -1,0 +1,22 @@
+Testing com.example.whitespace-test
+
+
+ERROR in (blank-lines-test) (whitespace_test.clj:10)
+
+
+Uncaught exception, not in assertion.
+
+
+expected: nil
+  actual: java.lang.AssertionError: Assert failed
+
+
+ at com.example.whitespace_test$fn__55555.invokeStatic (whitespace_test.clj:12)
+
+
+Ran 1 tests containing 1 assertions.
+
+
+0 failures, 1 errors.
+
+

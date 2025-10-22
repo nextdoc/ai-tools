@@ -1,0 +1,10 @@
+Testing com.example.edge-test
+
+ERROR in (timeout-test) (edge_test.clj:15)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: clojure.lang.ExceptionInfo: Request timeout
+{:timeout-ms 5000, :elapsed-ms 5123, :url "https://api.example.com/data"}
+
+Ran 1 tests containing 1 assertions.
+0 failures, 1 errors.

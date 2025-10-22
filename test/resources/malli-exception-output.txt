@@ -1,0 +1,24 @@
+Testing com.example.domain.business-test
+
+ERROR in (process-payment-request) (user.clj:8)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: clojure.lang.ExceptionInfo: Malli validation error
+{:function com.example.domain.business/process-payment-request, :input-exception [{:payment-request {:account-id ["missing required key"]}}]}
+ at user$eval90070$explain_thrower__90072.invoke (user.clj:8)
+    malli.instrument$_strument_BANG_$iter__9801__9807$fn__9808$iter__9803__9812$fn__9813$fn__9839$fn__9840.invoke (instrument.clj:24)
+    malli.core$__EQ__GT$reify$reify__3704$fn__3738.doInvoke (core.cljc:1914)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.lang.AFunction$1.doInvoke (AFunction.java:31)
+    clojure.lang.RestFn.invoke (RestFn.java:408)
+    com.example.domain.business_test$fn__83345.invokeStatic (business_test.clj:210)
+    com.example.domain.business_test/fn (business_test.clj:161)
+    clojure.test$test_var$fn__9856.invoke (test.clj:717)
+    clojure.test$test_var.invokeStatic (test.clj:717)
+    clojure.test$test_var.invoke (test.clj:708)
+    clojure.test$test_vars$fn__9882$fn__9887.invoke (test.clj:735)
+    com.example.test_fixtures$reset_cache.invokeStatic (test_fixtures.clj:50)
+    com.example.test_fixtures$reset_cache.invoke (test_fixtures.clj:39)
+
+Ran 33 tests containing 233 assertions.
+0 failures, 1 errors.

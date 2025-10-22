@@ -1,0 +1,20 @@
+Testing com.example.recursion-test
+
+ERROR in (infinite-loop) (recursion_test.clj:10)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: java.lang.StackOverflowError
+ at com.example.core.processor$process.invokeStatic (processor.clj:15)
+    com.example.core.processor$process.invoke (processor.clj:10)
+    clojure.lang.AFn.run (AFn.java:22)
+    clojure.lang.RestFn.invoke (RestFn.java:408)
+    clojure.core$apply.invokeStatic (core.clj:669)
+    clojure.lang.Compiler.eval (Compiler.java:7194)
+    clojure.core$eval.invokeStatic (core.clj:3215)
+    com.example.recursion_test$fn__99999.invokeStatic (recursion_test.clj:12)
+    clojure.test$test_var.invokeStatic (test.clj:717)
+    clojure.lang.RT.boundedLength (RT.java:1790)
+    java.lang.Thread.run (Thread.java:1583)
+
+Ran 1 tests containing 1 assertions.
+0 failures, 1 errors.

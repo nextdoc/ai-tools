@@ -1,0 +1,17 @@
+Testing com.example.core.utils-test
+
+Testing com.example.core.validation-test
+
+FAIL in (validate-email) (validation_test.clj:12)
+expected: (valid? "user@example.com")
+  actual: false
+
+ERROR in (validate-phone) (validation_test.clj:20)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: java.lang.IllegalArgumentException: Invalid phone format
+ at com.example.core.validation$validate_phone.invokeStatic (validation.clj:45)
+    com.example.core.validation_test$fn__12345.invokeStatic (validation_test.clj:22)
+
+Ran 15 tests containing 42 assertions.
+2 failures, 1 errors.

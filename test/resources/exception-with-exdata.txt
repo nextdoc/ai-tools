@@ -1,0 +1,15 @@
+Testing com.example.api.handler-test
+
+ERROR in (handle-invalid-request) (handler_test.clj:45)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: clojure.lang.ExceptionInfo: Invalid request parameters
+{:type :validation-error, :errors {:email "must be valid email", :age "must be positive"}, :request-id "req-12345"}
+ at com.example.api.validator$validate_request.invokeStatic (validator.clj:23)
+    com.example.api.validator$validate_request.invoke (validator.clj:15)
+    com.example.api.handler_test$fn__42156.invokeStatic (handler_test.clj:47)
+    clojure.lang.RestFn.invoke (RestFn.java:408)
+    clojure.test$test_var.invokeStatic (test.clj:717)
+
+Ran 1 tests containing 3 assertions.
+0 failures, 1 errors.
