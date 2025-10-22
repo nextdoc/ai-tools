@@ -141,13 +141,21 @@
 
 ;; Stack trace filtering utilities for cleaner test output
 ;; These utilities filter stack traces from nREPL test execution to remove:
-;; - Java/Clojure internals (java.lang.*, clojure.lang.*, clojure.test$*)  
+;; - Java/Clojure internals (java.lang.*, clojure.lang.*, clojure.test$*)
 ;; - Babashka/SCI internals (sci.lang.*, sci.impl.*, babashka.main$*)
 ;; - Generated evaluation forms (user$eval*)
-;; 
+;;
 ;; The filtering captures nREPL output during eval-expr execution and processes
 ;; it before displaying to the user, providing much cleaner error diagnostics.
 
+(defn- looks-like-stack-frame?
+  "Detects if a line looks like a stack trace frame.
+   Handles both 'at ...' format and bare 'package.Class.method (File:line)' format."
+  [line]
+  (let [trimmed (str/trim line)]
+    (or (str/starts-with? trimmed "at ")
+        ;; Match pattern like: "package.Class.method (File:123)"
+        (re-find #"[\w\.\$]+\s+\([^)]+:\d+\)" trimmed))))
 
 (defn- clean-stack-trace
   "Cleans and formats a stack trace for more readable test output.
@@ -166,33 +174,48 @@
                                  (subs line 3)  ; Remove "at " prefix
                                  line))))
         
+        ;; Categorize frames to preserve application code
+        is-application-frame? (fn [frame]
+                                ;; Keep if it's user code (not java/clojure/common libs)
+                                ;; AND has a .clj/.cljs file reference
+                                (and (not (or (str/includes? frame "java.")
+                                              (str/includes? frame "clojure.")
+                                              (str/includes? frame "sci.")
+                                              (str/includes? frame "babashka.")
+                                              (str/includes? frame "nrepl.")
+                                              (str/includes? frame "malli.core$")
+                                              (str/includes? frame "malli.instrument$")))
+                                     (re-find #"\.cljs?:\d+\)" frame)))
+
         ;; Separate filtering - keep important frames
         filtered-frames (->> raw-frames
                              (remove (fn [frame]
-                                       (or 
-                                         ;; Filter out Clojure/Java internals
-                                         (str/includes? frame "java.lang.Exception")
-                                         (str/includes? frame "java.lang.RuntimeException") 
-                                         (str/includes? frame "clojure.lang.ExceptionInfo")
-                                         (str/includes? frame "clojure.lang.AFn")
-                                         (str/includes? frame "clojure.lang.RestFn")
-                                         (str/includes? frame "clojure.lang.LazySeq")
-                                         (str/includes? frame "clojure.lang.RT")
-                                         (str/includes? frame "clojure.lang.Compiler")
-                                         (str/includes? frame "clojure.test$")
-                                         (str/includes? frame "clojure.core$apply")
-                                         (str/includes? frame "clojure.core$map")
-                                         (str/includes? frame "clojure.core$eval")
-                                         (str/includes? frame "clojure.core$with_bindings")
-                                         (str/includes? frame "clojure.main$repl")
-                                         
-                                         ;; Filter out Babashka internals (SCI - Small Clojure Interpreter)
-                                         (str/includes? frame "sci.lang.")
-                                         (str/includes? frame "sci.impl.")
-                                         (str/includes? frame "sci.core$")
-                                         (str/includes? frame "babashka.main$")
-                                         (str/starts-with? frame "user$eval") ; Generated eval forms
-                                         ))))
+                                       ;; ALWAYS keep application frames
+                                       (when-not (is-application-frame? frame)
+                                         (or
+                                           ;; Filter out Clojure/Java internals
+                                           (str/includes? frame "java.lang.Exception")
+                                           (str/includes? frame "java.lang.RuntimeException")
+                                           (str/includes? frame "clojure.lang.ExceptionInfo")
+                                           (str/includes? frame "clojure.lang.AFn")
+                                           (str/includes? frame "clojure.lang.RestFn")
+                                           (str/includes? frame "clojure.lang.LazySeq")
+                                           (str/includes? frame "clojure.lang.RT")
+                                           (str/includes? frame "clojure.lang.Compiler")
+                                           (str/includes? frame "clojure.test$")
+                                           (str/includes? frame "clojure.core$apply")
+                                           (str/includes? frame "clojure.core$map")
+                                           (str/includes? frame "clojure.core$eval")
+                                           (str/includes? frame "clojure.core$with_bindings")
+                                           (str/includes? frame "clojure.main$repl")
+
+                                           ;; Filter out Babashka internals (SCI - Small Clojure Interpreter)
+                                           (str/includes? frame "sci.lang.")
+                                           (str/includes? frame "sci.impl.")
+                                           (str/includes? frame "sci.core$")
+                                           (str/includes? frame "babashka.main$")
+                                           (str/starts-with? frame "user$eval") ; Generated eval forms
+                                           )))))
         
         ;; Check for recursion pattern
         recursion? (and (> (count filtered-frames) 20)
@@ -219,13 +242,16 @@
     cleaned-frames))
 
 (defn- clean-test-output
-  "Cleans test output to remove excessive stack traces and noise."
+  "Cleans test output to remove excessive stack traces and noise.
+   Preserves exception data (like Malli validation errors) that appears
+   between the 'actual:' line and the start of the stack trace."
   [output-lines]
   (let [lines (if (string? output-lines)
                 (str/split-lines output-lines)
                 output-lines)]
     (loop [result []
            remaining lines
+           in-exception-data? false
            in-stack-trace? false
            stack-trace-buffer []
            error-header nil]
@@ -236,48 +262,68 @@
           (-> result
               (into (clean-stack-trace stack-trace-buffer))
               (conj ""))  ; Add blank line after stack trace
-          
+
           ;; Otherwise return as-is
           :else result)
-        
+
         (let [line (first remaining)
               trimmed (str/trim line)]
           (cond
             ;; Testing header line - always keep
             (str/starts-with? trimmed "Testing ")
-            (recur (conj result "" line) (rest remaining) false [] nil)
-            
+            (recur (conj result "" line) (rest remaining) false false [] nil)
+
             ;; Start of error or failure - save header
             (or (str/starts-with? trimmed "ERROR in")
                 (str/starts-with? trimmed "FAIL in"))
-            (recur (conj result "" line) (rest remaining) false [] line)
-            
+            (recur (conj result "" line) (rest remaining) false false [] line)
+
             ;; Error description lines after ERROR/FAIL
-            (and error-header 
+            (and error-header
                  (not (str/starts-with? trimmed "expected:"))
                  (not (str/starts-with? trimmed "actual:")))
-            (recur (conj result line) (rest remaining) false [] error-header)
-            
-            ;; Expected line - keep and prepare for stack trace
+            (recur (conj result line) (rest remaining) false false [] error-header)
+
+            ;; Expected line - keep and prepare for exception data
             (str/starts-with? trimmed "expected:")
-            (recur (conj result line) (rest remaining) false [] nil)
-            
-            ;; Actual line - keep and start collecting stack trace
+            (recur (conj result line) (rest remaining) false false [] nil)
+
+            ;; Actual line - keep and start looking for exception data
             (str/starts-with? trimmed "actual:")
-            (recur (conj result line) (rest remaining) true [] nil)
-            
+            (recur (conj result line) (rest remaining) true false [] nil)
+
+            ;; Exception data phase: keep lines until we hit a stack frame
+            (and in-exception-data?
+                 (not in-stack-trace?)
+                 (not (looks-like-stack-frame? line)))
+            (if (or (str/blank? trimmed)
+                    (str/starts-with? trimmed "Ran ")
+                    (str/starts-with? trimmed "ERROR ")
+                    (str/starts-with? trimmed "FAIL ")
+                    (str/starts-with? trimmed "Testing "))
+              ;; End of exception without stack trace
+              (recur (conj result line) (rest remaining) false false [] nil)
+              ;; Exception data - keep it
+              (recur (conj result line) (rest remaining) true false [] nil))
+
+            ;; First stack frame detected - switch to stack trace mode
+            (and in-exception-data?
+                 (not in-stack-trace?)
+                 (looks-like-stack-frame? line))
+            (recur result (rest remaining) false true [line] nil)
+
             ;; Stack trace lines - collect in buffer
             (and in-stack-trace?
-                 (or (str/starts-with? trimmed "at ")
+                 (or (looks-like-stack-frame? line)
                      (and (not (str/blank? trimmed))
                           (not (str/starts-with? trimmed "Ran "))
                           (not (str/starts-with? trimmed "Testing "))
                           (not (str/starts-with? trimmed "ERROR "))
                           (not (str/starts-with? trimmed "FAIL ")))))
-            (recur result (rest remaining) true (conj stack-trace-buffer line) nil)
-            
+            (recur result (rest remaining) false true (conj stack-trace-buffer line) nil)
+
             ;; End of stack trace - clean buffer and add to result
-            (and in-stack-trace? 
+            (and in-stack-trace?
                  (or (str/blank? trimmed)
                      (str/starts-with? trimmed "Ran ")
                      (str/starts-with? trimmed "ERROR ")
@@ -286,20 +332,21 @@
             (let [cleaned (clean-stack-trace stack-trace-buffer)
                   new-result (into result cleaned)]
               ;; Re-process current line as it's not part of stack trace
-              (recur new-result remaining false [] nil))
-            
+              (recur new-result remaining false false [] nil))
+
             ;; Test summary line - always keep
             (re-find #"Ran \d+ tests containing \d+ assertions" trimmed)
-            (recur (conj result "" line) (rest remaining) false [] nil)
-            
+            (recur (conj result "" line) (rest remaining) false false [] nil)
+
             ;; Regular line
             :else
-            (recur (if (str/blank? trimmed) 
+            (recur (if (str/blank? trimmed)
                      result  ; Skip extra blank lines
-                     (conj result line)) 
-                   (rest remaining) 
-                   false 
-                   [] 
+                     (conj result line))
+                   (rest remaining)
+                   false
+                   false
+                   []
                    nil)))))))
 
 (defn run-tests
