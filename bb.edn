@@ -4,8 +4,8 @@
                                          :git/sha "19fbef2525e47d80b9278c49a545de58f48ee7cf"}}
  :tasks          {test              {:doc      "Run unit tests"
                                      :requires [[clojure.test :as t]
-                                                [io.nextdoc.tools-test]]
-                                     :task     (let [result (t/run-tests 'io.nextdoc.tools-test)
+                                                [io.nextdoc.clean-test]]
+                                     :task     (let [result (t/run-tests 'io.nextdoc.clean-test)
                                                      {:keys [fail error]} result]
                                                  (System/exit (+ fail error)))}
 

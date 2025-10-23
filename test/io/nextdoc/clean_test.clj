@@ -1,13 +1,13 @@
-(ns io.nextdoc.tools-test
+(ns io.nextdoc.clean-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [io.nextdoc.tools :as tools]))
+            [io.nextdoc.clean :as clean]))
 
 (deftest clean-test-output-preserves-malli-exception-data
   (testing "clean-test-output preserves Malli validation error data between actual: and stack trace"
     (let [input-lines (-> (io/resource "malli-exception-output.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "{:function com.example.domain.business/process-payment-request")
           "Malli exception data should be preserved in filtered output")
@@ -29,7 +29,7 @@
 (deftest clean-test-output-preserves-ex-data
   (testing "Preserves ex-data maps between actual: and stack trace"
     (let [input-lines (-> (io/resource "exception-with-exdata.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "{:type :validation-error")
           "ex-data map should be preserved")
@@ -43,7 +43,7 @@
 (deftest clean-test-output-preserves-test-structure
   (testing "Preserves test headers, failures, errors, and summaries"
     (let [input-lines (-> (io/resource "multiple-test-sections.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "Testing com.example.core.utils-test")
           "First test header should be preserved")
@@ -61,7 +61,7 @@
 (deftest clean-test-output-shows-filtering-stats
   (testing "Shows how many internal frames were filtered"
     (let [input-lines (-> (io/resource "heavy-stack-trace.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "Stack trace (cleaned")
           "Should indicate stack trace was cleaned")
@@ -79,7 +79,7 @@
 (deftest clean-test-output-handles-mixed-frame-formats
   (testing "Handles both 'at ' prefixed and bare stack frame formats"
     (let [input-lines (-> (io/resource "mixed-frame-formats.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "com.example.adapter.ServiceAdapter$invoke.invokeStatic (service_adapter.clj:78)")
           "Bare format frames should be detected and preserved")
@@ -91,7 +91,7 @@
 (deftest clean-test-output-handles-exception-without-stack-trace
   (testing "Handles exceptions with ex-data but no stack trace"
     (let [input-lines (-> (io/resource "exception-no-stack-trace.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "{:timeout-ms 5000")
           "Exception data should be preserved")
@@ -103,7 +103,7 @@
 (deftest clean-test-output-handles-blank-lines
   (testing "Handles excessive blank lines while preserving structure"
     (let [input-lines (-> (io/resource "blank-line-handling.txt") slurp str/split-lines)
-          result (tools/clean-test-output input-lines)
+          result (clean/clean-test-output input-lines)
           result-str (str/join "\n" result)]
       (is (str/includes? result-str "Testing com.example.whitespace-test")
           "Test header should be preserved")
