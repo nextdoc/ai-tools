@@ -225,6 +225,34 @@
       (throw (ex-info msg _data)))
     (when exit? (System/exit 1))))
 
+(defn- validate-comma-delimited
+  "Predicate that validates a collection of directory paths doesn't contain colon-separated values.
+   If a single element contains colons but no path separators, it's likely the user
+   used colon delimiters instead of commas.
+   Returns true if valid, false otherwise."
+  [dirs]
+  (if (sequential? dirs)
+    (not-any? (fn [dir]
+                (and (string? dir)
+                     (str/includes? dir ":")
+                     (not (str/includes? dir "/"))))  ; Allow colons in absolute paths like C:/...
+              dirs)
+    true))
+
+(defn- comma-delimited-error-msg
+  "Generates a helpful error message when colon delimiters are detected instead of commas.
+   Used as :ex-msg function for babashka.cli validation."
+  [{:keys [value]}]
+  (let [bad-dir (first (filter (fn [dir]
+                                 (and (string? dir)
+                                      (str/includes? dir ":")
+                                      (not (str/includes? dir "/"))))
+                               value))]
+    (str "Invalid delimiter: directories must be comma-separated, not colon-separated. "
+         "Found colons in: \"" bad-dir "\". "
+         "Did you use ':' instead of ',' to separate directories? "
+         "Use commas instead, e.g., \"src,test,dev\"")))
+
 (defn parse-jvm-tests-args
   "JVM: Parses command line arguments for the JVM test runner.
    Accepts CLI args and options with :exit? key to control exit behavior.
@@ -237,13 +265,16 @@
                                             :require  true
                                             :alias    :n
                                             :coerce   #(clojure.string/split % #",")
-                                            :validate seq}
-                              :directories {:ref     "<csv list>"
-                                            :desc    "Comma-separated list of directories (relative to target project) to scanned for changes & reloaded before running tests (JVM only)"
-                                            :require false
-                                            :alias   :d
-                                            :coerce  #(clojure.string/split % #",")
-                                            :default []}
+                                            :validate {:pred seq
+                                                       :ex-msg (constantly "Namespaces list cannot be empty")}}
+                              :directories {:ref      "<csv list>"
+                                            :desc     "Comma-separated list of directories (relative to target project) to scanned for changes & reloaded before running tests (JVM only)"
+                                            :require  false
+                                            :alias    :d
+                                            :coerce   #(clojure.string/split % #",")
+                                            :validate {:pred validate-comma-delimited
+                                                       :ex-msg comma-delimited-error-msg}
+                                            :default  []}
                               :port-file   {:ref      "<file path>"
                                             :desc     "The file containing the repl network port. defaults to .nrepl-port"
                                             :require  false
@@ -336,7 +367,8 @@
                                            :require  true
                                            :alias    :n
                                            :coerce   #(clojure.string/split % #",")
-                                           :validate seq}
+                                           :validate {:pred seq
+                                                      :ex-msg (constantly "Namespaces list cannot be empty")}}
                               :build-id   {:ref     "<build-id>"
                                            :desc    "Optional Shadow-CLJS build ID (e.g., dev, test)"
                                            :require false
