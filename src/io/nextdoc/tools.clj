@@ -9,12 +9,12 @@
    - Mixed mode execution (individual tests + full namespaces)"
   (:require
     [babashka.cli :as cli]
-    [babashka.nrepl-client :as nrepl]
     [clojure.edn :as edn]
     [clojure.java.io :as io]
     [clojure.pprint :as pprint]
     [clojure.string :as str]
     [io.nextdoc.clean :as clean]
+    [io.nextdoc.jvm-nrepl :as jvm-nrepl]
     [io.nextdoc.shadow-nrepl :as shadow-nrepl]))
 
 
@@ -41,82 +41,138 @@
           {:namespaces [] :individual-tests []}
           entries))
 
+(defn- generate-reload-code
+  "Generates code that reloads changed namespaces using a tracker OWNED BY THIS
+   TOOL, stored in the target JVM under io.nextdoc.test-runner-state/state.
+
+   Deliberately does NOT use clojure.tools.namespace.repl/refresh or
+   set-refresh-dirs: those mutate the REPL's global refresh state, and
+   narrowing the dirs there makes tools.namespace treat files under the
+   removed dirs as deleted — unloading dev namespaces, stripping the user
+   namespace bare, and breaking every later nREPL session in that JVM.
+
+   On the first run for a given dirs value the tracker has no baseline, so it
+   reloads only files modified since the JVM started (anything older is
+   already compiled into the running image). Later runs reload exactly what
+   changed since the previous run."
+  [directories requested-namespaces]
+  (str "(try
+  (require 'clojure.tools.namespace.dir
+           'clojure.tools.namespace.track
+           'clojure.tools.namespace.reload)
+  (let [state-ns (create-ns 'io.nextdoc.test-runner-state)
+        state-var (or (ns-resolve state-ns 'state) (intern state-ns 'state (atom nil)))
+        state-atom (deref state-var)
+        dirs " (pr-str (vec directories)) "
+        requested '" (pr-str (set requested-namespaces)) "
+        prev (deref state-atom)
+        fresh (not= dirs (:dirs prev))
+        tracker (if fresh (clojure.tools.namespace.track/tracker) (:tracker prev))
+        scanned (clojure.tools.namespace.dir/scan-dirs tracker dirs)
+        loaded (set (map ns-name (all-ns)))
+        filemap (get scanned :clojure.tools.namespace.file/filemap)
+        ns-mtime (reduce-kv (fn [m file n] (update m n (fnil max 0) (.lastModified file))) {} filemap)
+        jvm-start (.getStartTime (java.lang.management.ManagementFactory/getRuntimeMXBean))
+        keep-ns? (fn [n] (and (or (contains? loaded n) (contains? requested n))
+                              (or (not fresh) (> (get ns-mtime n 0) jvm-start))))
+        load-list (filterv keep-ns? (get scanned :clojure.tools.namespace.track/load))
+        unload-list (filterv keep-ns? (get scanned :clojure.tools.namespace.track/unload))
+        pruned (assoc scanned
+                 :clojure.tools.namespace.track/load load-list
+                 :clojure.tools.namespace.track/unload unload-list)
+        reloaded (clojure.tools.namespace.reload/track-reload pruned)
+        err (get reloaded :clojure.tools.namespace.reload/error)
+        err-ns (get reloaded :clojure.tools.namespace.reload/error-ns)]
+    (reset! state-atom {:dirs dirs
+                        :tracker (dissoc reloaded
+                                         :clojure.tools.namespace.reload/error
+                                         :clojure.tools.namespace.reload/error-ns)})
+    {:reloaded (mapv str load-list)
+     :fresh fresh
+     :error (when err
+              (str \"while reloading \" err-ns \": \" (.getMessage err)
+                   (when-let [c (.getCause err)] (str \" | cause: \" (.getMessage c)))))})
+  (catch Throwable t
+    {:error (str (.getMessage t)
+                 (when-let [c (.getCause t)] (str \" | cause: \" (.getMessage c))))}))"))
+
 (defn- generate-namespace-test-code
-  "Generates the code string for running tests in full namespaces."
+  "Generates the code string for running tests in full namespaces.
+   Requires each namespace first (capturing load failures per namespace) and,
+   when zero tests run, returns a per-namespace diagnosis so the caller can
+   distinguish a typo from a namespace with no clojure.test deftests."
   [namespaces]
   (str "(binding [*out* (java.io.StringWriter.)
-                  *err* (java.io.StringWriter.)]
-          (let [result (apply clojure.test/run-tests '" (pr-str namespaces) ")]
-            {:result result
-             :out (str *out*)
-             :err (str *err*)}))"))
-
-(defn- make-var-reference
-  "Creates a var reference string for a test.
-   Uses the test name as-is since Clojure allows hyphens in function names."
-  [{:keys [namespace test-name]}]
-  (str "#'" namespace "/" (name test-name)))
+          *err* (java.io.StringWriter.)]
+  (let [nss '" (pr-str (vec namespaces)) "
+        load-errors (into {}
+                          (keep (fn [n]
+                                  (try (require n) nil
+                                       (catch Throwable t
+                                         [n (str (.getMessage t)
+                                                 (when-let [c (.getCause t)]
+                                                   (str \" | cause: \" (.getMessage c))))]))))
+                          nss)
+        runnable (vec (remove (set (keys load-errors)) nss))
+        result (if (seq runnable)
+                 (apply clojure.test/run-tests runnable)
+                 {:test 0 :pass 0 :fail 0 :error 0})
+        deftest-count (fn [n] (if-let [ns-obj (find-ns n)]
+                                (count (filter (fn [[_ v]] (:test (meta v))) (ns-interns ns-obj)))
+                                0))
+        diagnosis (when (zero? (get result :test 0))
+                    (mapv (fn [n]
+                            (str n \": \"
+                                 (cond
+                                   (contains? load-errors n) (str \"failed to load - \" (get load-errors n))
+                                   (nil? (find-ns n)) \"not loaded (not on classpath?)\"
+                                   (zero? (deftest-count n)) \"loaded but contains no clojure.test deftest vars - Greenlight or other non-clojure.test tests cannot run via this tool\"
+                                   :else \"has deftest vars but clojure.test ran 0 tests\")))
+                          nss))]
+    {:result result
+     :diagnosis diagnosis
+     :out (str *out*)
+     :err (str *err*)}))"))
 
 (defn- generate-individual-test-code
-  "Generates the code string for running a single individual test function using run-test-var."
-  [{:keys [namespace test-name] :as test}]
-  (str "(binding [*out* (java.io.StringWriter.)
-                  *err* (java.io.StringWriter.)]
-          (do (require '" namespace ")
-              (let [result (clojure.test/run-test-var " (make-var-reference test) ")]
-                {:result result
-                 :out (str *out*)
-                 :err (str *err*)})))"))
+  "Generates the code string for running a single test function via run-test-var,
+   with a diagnosis instead of an opaque failure when the var is missing or not
+   a deftest."
+  [{:keys [namespace test-name]}]
+  (let [full-name (str namespace "/" test-name)]
+    (str "(binding [*out* (java.io.StringWriter.)
+          *err* (java.io.StringWriter.)]
+  (let [r (try
+            (require '" namespace ")
+            (let [v (resolve '" full-name ")]
+              (cond
+                (nil? v) {:diagnosis [\"" full-name ": var not found in loaded namespace\"]}
+                (nil? (:test (meta v))) {:diagnosis [\"" full-name ": var exists but is not a clojure.test deftest\"]}
+                :else {:result (clojure.test/run-test-var v)}))
+            (catch Throwable t
+              {:diagnosis [(str \"" full-name ": failed to load namespace - \" (.getMessage t))]}))]
+    (merge r {:out (str *out*) :err (str *err*)})))")))
 
-(defn- execute-test-code
-  "Executes test code via nREPL and returns the parsed result.
-   Captures all output (including test errors) for optional filtering.
-   When filter? is true, applies stack trace filtering for cleaner output.
-   Returns nil if the execution fails, which will be filtered out during result combination."
+(defn- execute-code
+  "Evaluates code via nREPL and returns the edn-parsed final value with the
+   server's stderr attached as :nrepl-err. Prints the server's stdout
+   (optionally filtered). When the eval produces no value the stderr IS the
+   error, so it is returned as :eval-error instead of being dropped."
   [port code filter?]
-  ;; Uncomment for debugging:
-  ;; (println "\n===== Executing test code: =====")
-  ;; (println code)
-  ;; (println "=================================\n")
   (try
-    ;; Capture all output from nREPL (including what eval-expr prints to *out*)
-    (let [output-buffer (java.io.StringWriter.)
-          result (binding [*out* output-buffer]
-                   ;; eval-expr prints server output to *out*, which we're capturing
-                   (let [response (nrepl/eval-expr {:port port :expr code})
-                         {:keys [vals err out]} response]
-                     ;; Return both the response and captured output
-                     {:response response
-                      :captured-output (str output-buffer)
-                      :vals vals
-                      :err err 
-                      :out out}))
-          {:keys [captured-output vals err]} result]
-      
-      ;; Print the captured output (filtered or unfiltered based on filter? flag)
-      (when (not (str/blank? captured-output))
+    (let [{:keys [vals out err]} (jvm-nrepl/eval-expr {:port port :expr code})]
+      (when-not (str/blank? out)
         (if filter?
-          (let [cleaned-lines (clean/clean-test-output captured-output)]
-            (doseq [line cleaned-lines]
-              (println line)))
-          (print captured-output)))
-      
-      ;; Uncomment for debugging:
-      ;; (when err
-      ;;   (println "nREPL error:" err))
-      ;; (when out
-      ;;   (println "nREPL structured output:" out))
-      
-      ;; Parse and return the test result
-      (cond
-        (and vals (seq vals)) (edn/read-string (first vals))
-        err nil
-        :else (do
-                (println "Warning: No result from nREPL execution")
-                nil)))
+          (doseq [line (clean/clean-test-output out)]
+            (println line))
+          (print out)))
+      (let [value (some-> (last vals) edn/read-string)]
+        (cond
+          (map? value) (assoc value :nrepl-err err)
+          (not (str/blank? err)) {:eval-error err}
+          :else {:eval-error "nREPL eval returned no value and no error output"})))
     (catch Exception e
-      (println "Failed to execute test code:" (.getMessage e))
-      nil)))
+      {:eval-error (str "nREPL connection/eval failed: " (ex-message e))})))
 
 (defn- merge-test-result
   "Merges a single test result into the accumulator."
@@ -138,76 +194,71 @@
           {:test 0 :pass 0 :fail 0 :error 0 :out [] :err []}
           (remove nil? results)))
 
+(defn- reload-summary
+  "One honest line about what the reload actually did."
+  [{:keys [reloaded fresh]} directories]
+  (let [n (count reloaded)
+        shown (take 15 reloaded)]
+    (str "Reloaded " n " changed namespace" (when (not= 1 n) "s")
+         " from dirs " (pr-str (vec directories))
+         (when fresh " (new tracker: files modified since JVM start)")
+         (when (pos? n)
+           (str ": " (str/join " " shown) (when (< 15 n) " ..."))))))
+
 (defn run-tests
   "JVM: Runs tests in the specified test namespaces using an nREPL connection.
    Supports both full namespaces and individual test functions using slash notation.
-   Reloads the test namespaces before running tests using clojure.tools.namespace.
-   Applies smart filtering to avoid duplicate execution when both individual tests 
-   and their containing namespaces are specified. Stack traces can be filtered for readability.
-   Returns a map containing test results, stdout, and stderr.
-   This function is specific to JVM/Clojure environments."
+   Reloads changed code first via a tool-owned tracker (see generate-reload-code);
+   pass empty directories to skip reloading entirely.
+   Returns {:values {:test :pass :fail :error} :out [...] :err [...]} on a run
+   that executed tests, or {:invocation-error \"...\"} when the run could not
+   execute tests at all (reload failure, connection failure, zero tests)."
   [port directories test-entries filter?]
-  (try
+  (let [{:keys [namespaces individual-tests]} (parse-test-entries test-entries)
+        requested (set (concat namespaces (map :namespace individual-tests)))
+        reload-problem
+        (if (empty? directories)
+          (do (println "Reload skipped (no directories)") nil)
+          (let [r (execute-code port (generate-reload-code directories requested) false)]
+            (cond
+              (:eval-error r) (str "Reload failed: " (:eval-error r))
+              (:error r) (str "Reload failed " (:error r)
+                              (when-not (str/blank? (:nrepl-err r))
+                                (str "\n" (:nrepl-err r))))
+              :else (do (println (reload-summary r directories)) nil))))]
+    (if reload-problem
+      {:invocation-error reload-problem}
+      ;; Smart filtering: when both my.ns/test1 and my.ns are specified, run only
+      ;; my.ns/test1 individually and skip the full my.ns namespace.
+      (let [individual-test-namespaces (set (map :namespace individual-tests))
+            filtered-namespaces (vec (remove individual-test-namespaces namespaces))
+            ;; Namespaces and individual tests run as separate nREPL evaluations
+            ;; to avoid nREPL issues with multiple test-var calls in one expression.
+            results (cond-> []
+                      (seq filtered-namespaces)
+                      (conj (execute-code port (generate-namespace-test-code filtered-namespaces) filter?))
 
-    ; JVM: Reload any updated source using clojure.tools.namespace
-    (let [reload-result (if (seq directories)
-                          (let [form1 "(require 'clojure.tools.namespace.repl)"
-                                form2 (str/join (conj (into ["(clojure.tools.namespace.repl/set-refresh-dirs "]
-                                                            (map pr-str directories))
-                                                      ")"))
-                                form3 "(clojure.tools.namespace.repl/refresh)"
-                                refresh-dirs-code (str/join "\n" [form1 form2 form3])]
-                            (-> {:port port
-                                 :expr refresh-dirs-code}
-                                (nrepl/eval-expr)
-                                :vals
-                                (last)))
-                          (-> {:port port
-                               :expr (pr-str
-                                       '((requiring-resolve 'clojure.tools.namespace.repl/refresh)))}
-                              (nrepl/eval-expr)
-                              :vals
-                              (last)))
-          reload-success? (= ":ok" reload-result)]
-      (if reload-success?
-        (do
-          (println "Reloaded" directories reload-result)
-          ; JVM: Run tests using clojure.test
-          (let [parsed (parse-test-entries test-entries)
-                {:keys [namespaces individual-tests]} parsed
-                
-                ;; Smart filtering: When both individual tests and full namespaces are specified,
-                ;; we filter out namespaces that have individual tests to avoid running the same
-                ;; test twice. For example: if both "my.ns/test1" and "my.ns" are specified,
-                ;; we only run "my.ns/test1" individually and skip the full "my.ns" namespace.
-                individual-test-namespaces (set (map :namespace individual-tests))
-                filtered-namespaces (remove individual-test-namespaces namespaces)
-                ;; We use separate nREPL evaluations for namespaces and individual tests,
-                ;; then combine the results. For individual tests, we run each one separately
-                ;; to avoid nREPL issues with multiple test-var calls in one expression.
-                results (cond-> []
-                          (seq filtered-namespaces)
-                          (conj (execute-test-code port (generate-namespace-test-code filtered-namespaces) filter?))
-                          
-                          (seq individual-tests)
-                          (into (map #(execute-test-code port (generate-individual-test-code %) filter?) individual-tests)))
-                
-                ;; Combine all results
-                combined-result (combine-test-results results)]
-            
-            (if (pos? (:test combined-result))
-              {:values (select-keys combined-result [:test :pass :fail :error])
-               :out (:out combined-result)
-               :err (:err combined-result)}
-              (throw (ex-info "No tests were executed" 
-                              {:namespaces namespaces
-                               :individual-tests individual-tests
-                               :filtered-namespaces filtered-namespaces})))))
-        (do
-          (println "Reload failed...")
-          (pprint/pprint reload-result))))
-    (catch Throwable t
-      (.printStackTrace t))))
+                      (seq individual-tests)
+                      (into (map #(execute-code port (generate-individual-test-code %) filter?) individual-tests)))
+            eval-errors (keep :eval-error results)
+            ;; Fold the server's stderr frames into each result's :err output
+            combined (combine-test-results
+                       (map #(assoc % :err (str (:err %) (:nrepl-err %))) results))
+            diagnosis (vec (mapcat :diagnosis results))]
+        (cond
+          (seq eval-errors)
+          {:invocation-error (str/join "\n" eval-errors)}
+
+          (zero? (:test combined))
+          {:invocation-error
+           (str "No tests were executed:\n"
+                (str/join "\n" (map #(str "  " %) diagnosis)))}
+
+          :else
+          (cond-> {:values (select-keys combined [:test :pass :fail :error])
+                   :out (:out combined)
+                   :err (:err combined)}
+            (seq diagnosis) (assoc :diagnosis diagnosis)))))))
 
 (defn handle-parse-error
   "SHARED: Higher-order function returning an :error-fn compatible handler for CLI parsing errors.
@@ -253,6 +304,39 @@
          "Did you use ':' instead of ',' to separate directories? "
          "Use commas instead, e.g., \"src,test,dev\"")))
 
+(def ^:private jvm-flag-aliases
+  {"-n" :namespaces "--namespaces" :namespaces
+   "-d" :directories "--directories" :directories
+   "-p" :port-file "--port-file" :port-file
+   "-f" :filter "--filter" :filter})
+
+(defn duplicate-flags
+  "Returns the set of logical flags passed more than once (e.g. -n a -n b).
+   babashka.cli is last-wins for repeated flags, which silently drops all but
+   the final value, so repeats are rejected up front."
+  [args]
+  (->> args
+       (keep jvm-flag-aliases)
+       frequencies
+       (keep (fn [[flag n]] (when (< 1 n) flag)))
+       set))
+
+(defn path-like-entries
+  "Namespace entries that look like file paths rather than namespace symbols
+   (a .clj/.cljs/.cljc suffix, or more than the single slash used by the
+   ns/test-fn notation)."
+  [entries]
+  (filterv (fn [entry]
+             (or (some? (re-find #"\.clj[cs]?$" entry))
+                 (< 1 (count (re-seq #"/" entry)))))
+           entries))
+
+(defn- default-reload-dirs
+  "Dirs reloaded when -d is omitted: src and test when they exist under the
+   current project. Never falls back to the whole classpath."
+  []
+  (filterv #(.isDirectory (io/file %)) ["src" "test"]))
+
 (defn parse-jvm-tests-args
   "JVM: Parses command line arguments for the JVM test runner.
    Accepts CLI args and options with :exit? key to control exit behavior.
@@ -268,7 +352,7 @@
                                             :validate {:pred seq
                                                        :ex-msg (constantly "Namespaces list cannot be empty")}}
                               :directories {:ref      "<csv list>"
-                                            :desc     "Comma-separated list of directories (relative to target project) to scanned for changes & reloaded before running tests (JVM only)"
+                                            :desc     "Comma-separated list of directories (relative to target project) scanned for changes & reloaded before running tests (JVM only). Defaults to src,test when they exist. Pass 'none' to skip reloading."
                                             :require  false
                                             :alias    :d
                                             :coerce   #(clojure.string/split % #",")
@@ -295,37 +379,59 @@
 
 (defn run-tests-task
   "JVM: Main entry point for the JVM test runner task.
-   Parses command line arguments, connects to the nREPL server,
-   runs the specified tests (supporting both namespaces and individual test functions),
-   optionally applies stack trace filtering, and returns an exit code based on test results.
-   This function is specific to JVM/Clojure environments."
+   Parses and validates command line arguments, connects to the nREPL server,
+   runs the specified tests (supporting both namespaces and individual test
+   functions), and optionally applies stack trace filtering.
+   Exit codes: 0 = all tests passed, 1 = test failures/errors,
+   2 = the run could not execute tests (bad arguments, reload failure,
+   connection failure, or zero tests found)."
   [args]
-  (let [{:keys [namespaces directories port-file] filter? :filter} (parse-jvm-tests-args args)
-        port (read-port port-file)
-        result (run-tests port directories namespaces filter?)]
-    (if (seq (:values result))
-      (let [{:keys [fail error]} (:values result)
-            return-code (reduce + [fail error])]
-        ;; Output test results (filtered or unfiltered based on filter option)
-        (some->> (:out result) 
-                 (remove empty?) 
-                 seq 
-                 ((if filter? clean/clean-test-output identity))
-                 (str/join "\n") 
-                 (#(str "<stdout>\n" % "\n</stdout>")) 
-                 println)
-        (some->> (:err result) 
-                 (remove empty?) 
-                 seq 
-                 ((if filter? clean/clean-test-output identity))
-                 (str/join "\n") 
-                 (#(str "<stderr>\n" % "\n</stderr>")) 
-                 println)
-        return-code)
-      (do
-        (println "Test invocation failed")
-        (pprint/pprint result)
-        1))))
+  (let [dups (duplicate-flags args)]
+    (if (seq dups)
+      (do (println (str "Repeated flag(s): " (str/join ", " (map name dups))
+                        ". Each flag takes ONE comma-separated list, e.g. -n ns.one,ns.two"
+                        " - repeated flags are last-wins and silently drop earlier values."))
+          2)
+      (let [{:keys [namespaces directories port-file] filter? :filter} (parse-jvm-tests-args args)
+            bad-entries (path-like-entries namespaces)]
+        (if (seq bad-entries)
+          (do (println (str "These -n entries look like file paths, not namespaces: "
+                            (str/join ", " bad-entries)
+                            ". Pass namespace symbols, e.g. components.cdb.cdb-records-test"
+                            " (or ns/test-name for an individual test)."))
+              2)
+          (let [port (read-port port-file)
+                dirs (cond
+                       (= ["none"] directories) []
+                       (seq directories) directories
+                       :else (default-reload-dirs))
+                result (run-tests port dirs namespaces filter?)]
+            (if-let [problem (:invocation-error result)]
+              (do (println "Test invocation failed:")
+                  (println problem)
+                  2)
+              (let [{:keys [fail error]} (:values result)]
+                ;; Output test results (filtered or unfiltered based on filter option)
+                (some->> (:out result)
+                         (remove empty?)
+                         seq
+                         ((if filter? clean/clean-test-output identity))
+                         (str/join "\n")
+                         (#(str "<stdout>\n" % "\n</stdout>"))
+                         println)
+                (some->> (:err result)
+                         (remove empty?)
+                         seq
+                         ((if filter? clean/clean-test-output identity))
+                         (str/join "\n")
+                         (#(str "<stderr>\n" % "\n</stderr>"))
+                         println)
+                (some->> (:diagnosis result)
+                         seq
+                         (str/join "\n")
+                         (#(str "<diagnosis>\n" % "\n</diagnosis>"))
+                         println)
+                (if (pos? (+ fail error)) 1 0)))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Shadow-CLJS Test Runner Implementation

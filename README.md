@@ -87,12 +87,14 @@ bb nrepl:test-shadow   # ClojureScript
   - Full namespace: `my.project.core-test`
   - Individual test: `my.project.core-test/test-function-name`
   - Mixed: `my.project.core-test/specific-test,my.project.utils-test`
-- `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional)
+- `-d, --directories`: Comma-separated list of directories to scan for changes & reload before running tests (optional; defaults to `src,test` when they exist; pass `none` to skip reloading)
 - `-p, --port-file`: Path to the file containing the nREPL port (default: ".nrepl-port")
 - `-f, --filter`: Filter stack traces to remove internal frames (default: true)
   - Set to `false` to see full unfiltered stack traces for debugging
 
-The --directories option is useful if some of your sources fail to reload cleanly using tools.namespace.
+Reloading uses a tracker owned by this tool (stored in the target JVM under `io.nextdoc.test-runner-state/state`), NOT `clojure.tools.namespace.repl/refresh` — so it never mutates the REPL's global refresh-dirs, never reloads the whole classpath, and changing `-d` between runs is safe. The first run for a given `-d` value reloads only files modified since the JVM started; later runs reload exactly what changed since the previous run.
+
+Exit codes: `0` all tests passed, `1` tests ran with failures/errors, `2` no tests could be executed (bad arguments, reload failure, connection failure, or zero tests found — the output includes a per-namespace diagnosis, e.g. distinguishing a typo'd namespace from one that contains no `clojure.test` deftests).
 
 **Note:** Individual test execution is currently only supported for JVM Clojure tests, not ClojureScript.
 
